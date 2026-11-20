@@ -382,6 +382,7 @@ service cloud.firestore {
       allow create: if isValidId(judgeId) && isValidJudge(incoming(), judgeId) && incoming().createdAt == request.time && incoming().updatedAt == request.time && (
         isAdmin() || (
           isSignedIn() &&
+          !exists(/databases/$(database)/documents/eventResets/current) &&
           incoming().uid == request.auth.uid &&
           incoming().active == true &&
           incoming().email.size() >= 3 &&
@@ -415,6 +416,7 @@ service cloud.firestore {
       allow get: if isValidId(sessionUid) && (isAdmin() || (isSignedIn() && request.auth.uid == sessionUid));
       allow list: if isAdmin();
       allow create: if isValidId(sessionUid) && isSignedIn() && sessionUid == request.auth.uid &&
+        !exists(/databases/$(database)/documents/eventResets/current) &&
         isValidJudgeSession(incoming(), sessionUid) &&
         incoming().uid == request.auth.uid &&
         incoming().createdAt == request.time &&
