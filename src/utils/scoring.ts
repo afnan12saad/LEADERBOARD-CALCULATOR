@@ -442,14 +442,15 @@ export function buildAdminApprovalEmailUrl(params: {
   firstAdminEmail: string;
   candidateName: string;
   candidateEmail: string;
-  code: string;
+  /** Unused: codes no longer approve anything. Kept so old callers still compile. */
+  code?: string;
   appUrl: string;
 }): string {
   const subject = encodeURIComponent(
-    `[PROJECT ARENA] Administrator Verification Code: ${params.code}`,
+    '[PROJECT ARENA] Administrator access request waiting for approval',
   );
   const body = encodeURIComponent(
-    `Hello First Administrator,
+    `Hello,
 
 A new organizer has requested administrator access to the Project Arena Evaluation Console.
 
@@ -457,15 +458,11 @@ Requester Details:
 - Name: ${params.candidateName}
 - Email: ${params.candidateEmail}
 
-Your 6-Digit Admin Verification Code:
->>>  ${params.code}  <<<
+To approve: open the Admin Console at ${params.appUrl || window.location.origin}/admin and click "Accept & Add Admin" in the join request. Only an existing admin can approve, and the console allows at most 5 admin accounts.
 
-To approve this administrator request:
-1. Provide the 6-digit verification code (${params.code}) to the requester so they can complete verification at /admin/login.
-2. Or open your Admin Console at ${params.appUrl || window.location.origin}/admin and click "Accept & Add Admin" under the Admin Requests panel.
+If you do not recognise this person, decline the request.
 
-Best regards,
-PROJECT ARENA Security System`,
+PROJECT ARENA`,
   );
   return `mailto:${params.firstAdminEmail}?subject=${subject}&body=${body}`;
 }
