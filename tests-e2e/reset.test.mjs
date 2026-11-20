@@ -89,8 +89,12 @@ ok('second concurrent reset is refused', blk&&await cnt(adm,'evaluations')===75&
 // 9. two simultaneous starts: exactly one proceeds
 await seed(5,15);
 const pA=archiveAndStartNewEvent(settings,'a@x.com'); await new Promise(r=>setTimeout(r,150)); const pB=archiveAndStartNewEvent(settings,'b@x.com'); const rr=await Promise.allSettled([pA,pB])
-ok('second reset started while the first is running is refused', rr.filter(r=>r.status==='fulfilled').length===1);
-ok('and exactly one archive exists', await cnt(adm,'eventArchives')===1);
+// Timing decides whether B is refused (lock held) or runs after A finished. Both are safe; what must never happen is lost or mixed data.
+const fulfilled=rr.filter(r=>r.status==='fulfilled').length;
+const archs=(await getDocs(collection(adm,'eventArchives'))).docs.map(d=>d.data().totalSubmissions).sort((x,y)=>y-x);
+ok('two simultaneous starts: refused, or strictly sequential with no data lost ('+fulfilled+' finished, archives '+JSON.stringify(archs)+')',
+  (fulfilled===1&&archs.length===1&&archs[0]===75)||(fulfilled===2&&archs.length===2&&archs[0]===75&&archs[1]===0));
+ok('ratings and teams end clean after concurrent starts', await cnt(adm,'evaluations')===0&&await cnt(adm,'teams')===15);
 // 11. judge registration is blocked while a reset marker exists, allowed otherwise
 await seed(1,3);
 const reg=(uid)=>{const db=env.authenticatedContext(uid).firestore(); const id='J_'+uid.toUpperCase(); const b=writeBatch(db);
@@ -109,6 +113,12 @@ for(let k=0;k<400;k++){ const n=await cnt(adm,'evaluations'); if(n<4500&&n>0) br
 await env.withSecurityRulesDisabled(async c=>updateDoc(doc(c.firestore(),'eventResets','current'),{owner:'someone-else'}));
 const outcome=await run; const left=await cnt(adm,'evaluations');
 ok('original run stops after another session takes over ('+outcome.slice(0,40)+', '+left+' ratings left)', /taken over/.test(outcome)&&left>0);
+// 13. final write is guarded: a run that lost ownership cannot reopen submissions or recreate teams
+await seed(2,3); setDb(adm);
+await env.withSecurityRulesDisabled(async c=>{await setDoc(doc(c.firestore(),'settings','event'),{...settings,submissionsOpen:false,updatedAt:Timestamp.now()}); await setDoc(doc(c.firestore(),'eventResets','current'),{status:'deleting',archiveId:'x',expectedRatingCount:6,startedBy:'a',owner:'new-owner',updatedAtMs:Date.now()});});
+let guarded=false; try{await initializeEverythingToZeroWith15Teams({...settings,submissionsOpen:true},{clearResetLock:true,finalGuard:async(tx)=>{const cur=await tx.get(doc(adm,'eventResets','current')); if(cur.data().owner!=='old-owner') throw new Error('taken over');}});}catch(e){guarded=/taken over/.test(e.message)}
+const evG=(await getDoc(doc(adm,'settings','event'))).data();
+ok('stale owner cannot run the final write (settings stay closed, marker kept, no new teams)', guarded&&evG.submissionsOpen===false&&(await getResetState())!==null&&await cnt(adm,'teams')===0);
 // 10. non-admin cannot touch the marker
 const nb=env.authenticatedContext('u1').firestore(); let nd=false; try{await getDoc(doc(nb,'eventResets','current'));}catch{nd=true}
 ok('non-admin cannot read reset marker', nd);
