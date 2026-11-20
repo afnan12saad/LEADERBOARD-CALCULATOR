@@ -554,7 +554,7 @@ export function AdminControlsPanel({
                 Accept Rating Submissions
               </div>
               <div className="text-xs text-slate-400">
-                Allow judges to submit 1 to 5 star overall ratings.
+                Allow judges to submit five-criteria scores.
               </div>
             </div>
             <button
