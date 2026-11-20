@@ -40,9 +40,9 @@ export function ConfirmDialog({
       role="dialog"
       aria-modal="true"
       aria-labelledby="confirm-dialog-title"
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-xs p-4"
+      className="fixed inset-0 z-50 flex justify-center overflow-y-auto overscroll-contain bg-black/70 backdrop-blur-xs p-4"
     >
-      <div className="bg-[#0D1E33] border border-[#1E3A5F] rounded-xl shadow-2xl max-w-md w-full p-6 animate-reveal">
+      <div className="bg-[#0D1E33] border border-[#1E3A5F] rounded-xl shadow-2xl max-w-md w-full my-auto p-6 animate-reveal">
         <div className="flex items-start justify-between gap-4 mb-3">
           <div className="flex items-center gap-3">
             {danger && (
