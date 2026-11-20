@@ -300,7 +300,7 @@ export function AdminControlsPanel({
                         preset.seconds,
                       )
                     }
-                    className={`px-3 py-1.5 rounded-lg text-xs font-semibold font-mono-tabular transition-colors ${
+                    className={`min-h-[44px] px-3 py-1.5 rounded-lg text-xs font-semibold font-mono-tabular transition-colors ${
                       isSelected
                         ? 'bg-[#2563EB] text-white'
                         : 'border border-[#24436B] bg-[#081422] text-slate-300 hover:bg-[#102640] hover:text-white'
@@ -561,7 +561,7 @@ export function AdminControlsPanel({
               type="button"
               disabled={busy}
               onClick={() => void handleToggleSubmissions()}
-              className={`px-3.5 py-2 rounded-lg text-xs font-semibold transition-colors whitespace-nowrap ${
+              className={`min-h-[44px] px-3.5 py-2 rounded-lg text-xs font-semibold transition-colors whitespace-nowrap ${
                 settings.submissionsOpen
                   ? 'bg-[#16A34A] text-white hover:bg-[#15803d]'
                   : 'bg-[#172B44] text-slate-300 hover:bg-[#1e3756]'
@@ -584,7 +584,7 @@ export function AdminControlsPanel({
               type="button"
               disabled={busy}
               onClick={() => void handleToggleEditing()}
-              className={`px-3.5 py-2 rounded-lg text-xs font-semibold transition-colors whitespace-nowrap ${
+              className={`min-h-[44px] px-3.5 py-2 rounded-lg text-xs font-semibold transition-colors whitespace-nowrap ${
                 settings.editingAllowed
                   ? 'bg-[#2563EB] text-white hover:bg-[#1d4ed8]'
                   : 'bg-[#172B44] text-slate-300 hover:bg-[#1e3756]'
@@ -631,7 +631,7 @@ export function AdminControlsPanel({
               type="button"
               disabled={busy}
               onClick={() => setResetConfirmOpen(true)}
-              className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg border border-red-500/40 bg-red-950/40 text-red-300 text-xs font-semibold hover:bg-red-950/70 shrink-0"
+              className="inline-flex items-center gap-1.5 min-h-[44px] px-3.5 py-2 rounded-lg border border-red-500/40 bg-red-950/40 text-red-300 text-xs font-semibold hover:bg-red-950/70 shrink-0"
             >
               <Trash2 className="w-4 h-4" />
               {resetPending ? 'Resume Start New Event' : 'Start New Event'}
