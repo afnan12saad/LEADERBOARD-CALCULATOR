@@ -8,6 +8,7 @@ import {
   orderBy,
   query,
   runTransaction,
+  type Transaction,
   serverTimestamp,
   setDoc,
   updateDoc,
@@ -1235,6 +1236,8 @@ export async function initializeEverythingToZeroWith15Teams(
     expectedRatingCount?: number;
     clearResetLock?: boolean;
     beforeChunk?: () => Promise<void>;
+    // Runs inside the final transaction; throw to stop (used to prove this run still owns the reset).
+    finalGuard?: (tx: Transaction) => Promise<void>;
   },
 ): Promise<void> {
   try {
@@ -1278,7 +1281,15 @@ export async function initializeEverythingToZeroWith15Teams(
       await chunk.commit();
     }
 
-    const batch = writeBatch(db);
+    const queued: Array<['set' | 'delete', ReturnType<typeof doc>, unknown?]> = [];
+    const batch = {
+      set: (ref: ReturnType<typeof doc>, data: unknown) => {
+        queued.push(['set', ref, data]);
+      },
+      delete: (ref: ReturnType<typeof doc>) => {
+        queued.push(['delete', ref]);
+      },
+    };
     for (let i = 0; i < INITIAL_15_TEAMS.length; i += 1) {
       const t = INITIAL_15_TEAMS[i];
       batch.set(doc(db, 'teams', t.id), {
@@ -1329,7 +1340,24 @@ export async function initializeEverythingToZeroWith15Teams(
       updatedAt: serverTimestamp(),
     });
 
-    await batch.commit();
+    if (options?.finalGuard) {
+      // Ownership check and the final writes happen together, so an old worker
+      // that lost the reset to another session cannot reopen or reset settings.
+      await runTransaction(db, async (tx) => {
+        await options.finalGuard!(tx);
+        for (const [kind, ref, data] of queued) {
+          if (kind === 'set') tx.set(ref, data as Record<string, unknown>);
+          else tx.delete(ref);
+        }
+      });
+    } else {
+      const b = writeBatch(db);
+      for (const [kind, ref, data] of queued) {
+        if (kind === 'set') b.set(ref, data as Record<string, unknown>);
+        else b.delete(ref);
+      }
+      await b.commit();
+    }
   } catch (err) {
     handleFirestoreError(err, OperationType.WRITE, 'settings/event');
   }
@@ -1564,6 +1592,14 @@ export async function archiveAndStartNewEvent(
       { ...settings, submissionsOpen: true },
       {
         clearResetLock: true,
+        finalGuard: async (tx) => {
+          const cur = await tx.get(lockRef);
+          if (!cur.exists() || cur.data().owner !== token) {
+            throw new Error(
+              'This reset was taken over by another admin session, so this one stopped.',
+            );
+          }
+        },
         beforeChunk: async () => {
           await runTransaction(db, async (tx) => {
             const cur = await tx.get(lockRef);
