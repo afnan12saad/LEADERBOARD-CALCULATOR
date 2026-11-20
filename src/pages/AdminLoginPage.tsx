@@ -509,7 +509,7 @@ export function AdminLoginPage() {
                       <button
                         type="button"
                         onClick={() => switchMode('forgot')}
-                        className="text-xs font-semibold text-[#F5B942] hover:underline"
+                        className="inline-flex items-center min-h-[44px] text-xs font-semibold text-[#F5B942] hover:underline"
                       >
                         Forgot password?
                       </button>
