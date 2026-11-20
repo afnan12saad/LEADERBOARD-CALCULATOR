@@ -300,16 +300,8 @@ service cloud.firestore {
         incoming().id == existing().id &&
         incoming().uid == existing().uid &&
         incoming().requestedAt == existing().requestedAt &&
-        incoming().updatedAt == request.time && (
-          isAdmin() ||
-          (
-            isVerified() &&
-            request.auth.uid == requestId &&
-            incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt', 'approvedAt', 'approvedBy']) &&
-            incoming().status == 'approved' &&
-            existing().verificationCode == incoming().verificationCode
-          )
-        );
+        incoming().updatedAt == request.time &&
+        isAdmin();
       allow delete: if isValidId(requestId) && isAdmin();
     }
 
