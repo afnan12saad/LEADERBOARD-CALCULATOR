@@ -8,7 +8,7 @@ import type {
   LeaderboardEntry,
   Team,
 } from '../types/arena';
-import { STAR_LABELS, isValidStarRating } from './scoring';
+import { CRITERIA } from './scoring';
 
 function sanitizeCsvCell(value: string | number): string {
   const str = String(value ?? '');
@@ -39,7 +39,7 @@ export function exportLeaderboardCsv(
     'Team Name',
     'Project Title',
     'Presentation Status',
-    'Average Rating (out of 5)',
+    'Average Score (out of 25)',
     'Submissions Received',
     'Total Judges',
   ];
@@ -89,8 +89,9 @@ export function exportFullWorkbookXlsx(
     Team: e.teamName,
     'Project Title': e.projectTitle,
     'Presentation Status': e.presentationStatus,
-    'Average Rating (/5)': e.submittedCount > 0 ? Number(e.averageFormatted) : 'N/A',
-    'Total Score': e.ratingSum,
+    'Average Score (/25)': e.submittedCount > 0 ? Number(e.averageFormatted) : 'N/A',
+    'Total Score (sum of totals)': e.ratingSum,
+    'Old 1-5 Ratings (not in score)': e.legacyCount ?? 0,
     'Submissions Received': e.submittedCount,
     'Total Judges': e.totalJudges,
   }));
@@ -123,16 +124,16 @@ export function exportFullWorkbookXlsx(
   const teamMap = new Map(teams.map((t) => [t.id, t]));
   const judgeMap = new Map(judges.map((j) => [j.id, j]));
   const evalSheetData = evaluations.map((ev) => {
-    const starLabel = isValidStarRating(ev.rating)
-      ? STAR_LABELS[ev.rating]
-      : '';
     return {
       'Judge Name': judgeMap.get(ev.judgeId)?.name ?? '-',
       'Judge Email': judgeMap.get(ev.judgeId)?.email ?? '-',
       Team: teamMap.get(ev.teamId)?.name ?? ev.teamId,
       'Project Title': teamMap.get(ev.teamId)?.projectTitle ?? '-',
-      'Overall Rating (/5)': ev.rating,
-      'Rating Label': starLabel,
+      ...Object.fromEntries(
+        CRITERIA.map(({ id, label }) => [`${label} (/5)`, ev.criteria?.[id] ?? '']),
+      ),
+      'Total (/25)': ev.total ?? '',
+      'Old 1-5 Rating (not in standings)': ev.total === undefined ? ev.rating ?? '' : '',
       Feedback: ev.comment || '',
     };
   });
@@ -186,12 +187,12 @@ export function exportLeaderboardPdf(
 
   autoTable(doc, {
     startY: 138,
-    head: [['Rank', 'Team Name', 'Project Title', 'Average (/5)', 'Submissions']],
+    head: [['Rank', 'Team Name', 'Project Title', 'Average (/25)', 'Submissions']],
     body: entries.map((e) => [
       e.submittedCount > 0 ? (e.isTied ? `${e.rank} (Tie)` : `${e.rank}`) : '-',
       e.teamName,
       e.projectTitle,
-      e.submittedCount > 0 ? `${e.averageFormatted} / 5` : 'Pending',
+      e.submittedCount > 0 ? `${e.averageFormatted} / 25` : 'Pending',
       `${e.submittedCount} / ${e.totalJudges}`,
     ]),
     headStyles: {
