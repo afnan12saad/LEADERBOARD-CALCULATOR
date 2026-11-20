@@ -1,0 +1,299 @@
+{
+  "entities": {
+    "EventSettings": {
+      "title": "EventSettings",
+      "description": "Global event configuration, presentation timer state, and publication controls.",
+      "type": "object",
+      "properties": {
+        "eventName": { "type": "string", "maxLength": 120 },
+        "collegeName": { "type": "string", "maxLength": 140 },
+        "tagline": { "type": "string", "maxLength": 120 },
+        "venue": { "type": "string", "maxLength": 140 },
+        "eventDate": { "type": "string", "maxLength": 60 },
+        "customDomain": { "type": "string", "maxLength": 200 },
+        "submissionsOpen": { "type": "boolean" },
+        "editingAllowed": { "type": "boolean" },
+        "resultsPublished": { "type": "boolean" },
+        "tieBreakerMode": { "type": "string", "enum": ["tie", "admin_order"] },
+        "currentTeamId": { "type": "string", "maxLength": 128 },
+        "timerDurationSeconds": { "type": "integer" },
+        "timerWarningSeconds": { "type": "integer" },
+        "timerRemainingSeconds": { "type": "integer" },
+        "timerRunning": { "type": "boolean" },
+        "timerStartedAtMs": { "type": "integer" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "eventName",
+        "collegeName",
+        "tagline",
+        "venue",
+        "eventDate",
+        "customDomain",
+        "submissionsOpen",
+        "editingAllowed",
+        "resultsPublished",
+        "tieBreakerMode",
+        "currentTeamId",
+        "timerDurationSeconds",
+        "timerWarningSeconds",
+        "timerRemainingSeconds",
+        "timerRunning",
+        "timerStartedAtMs",
+        "updatedAt"
+      ]
+    },
+    "PublicSummary": {
+      "title": "PublicSummary",
+      "description": "Public aggregate counts for registered judges without exposing judge identities.",
+      "type": "object",
+      "properties": {
+        "totalJudges": { "type": "integer" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["totalJudges", "updatedAt"]
+    },
+    "Team": {
+      "title": "Team",
+      "description": "Participating student project team and presentation metadata.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "name": { "type": "string", "maxLength": 100 },
+        "projectTitle": { "type": "string", "maxLength": 160 },
+        "description": { "type": "string", "maxLength": 500 },
+        "logoUrl": { "type": "string", "maxLength": 200000 },
+        "presentationStatus": { "type": "string", "enum": ["Waiting", "Presenting", "Completed"] },
+        "orderIndex": { "type": "integer" },
+        "tieBreakerRank": { "type": "integer" },
+        "submittedCount": { "type": "integer" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "id",
+        "name",
+        "projectTitle",
+        "description",
+        "logoUrl",
+        "presentationStatus",
+        "orderIndex",
+        "tieBreakerRank",
+        "submittedCount",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "Judge": {
+      "title": "Judge",
+      "description": "Registered judge profile and assigned Judge ID.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "judgeCode": { "type": "string", "maxLength": 32, "pattern": "^[A-Z0-9_\\-]+$" },
+        "name": { "type": "string", "maxLength": 100 },
+        "department": { "type": "string", "maxLength": 100 },
+        "email": { "type": "string", "maxLength": 160 },
+        "uid": { "type": "string", "maxLength": 128 },
+        "active": { "type": "boolean" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "id",
+        "judgeCode",
+        "name",
+        "department",
+        "email",
+        "uid",
+        "active",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "JudgeCredential": {
+      "title": "JudgeCredential",
+      "description": "Secret access code for claiming a Judge ID.",
+      "type": "object",
+      "properties": {
+        "judgeId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "accessCode": { "type": "string", "maxLength": 64 },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["judgeId", "accessCode", "updatedAt"]
+    },
+    "JudgeSession": {
+      "title": "JudgeSession",
+      "description": "Maps a verified Firebase Auth UID to an authorized Judge ID.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "maxLength": 128 },
+        "judgeId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "accessCode": { "type": "string", "maxLength": 64 },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "judgeId", "accessCode", "createdAt"]
+    },
+    "Evaluation": {
+      "title": "Evaluation",
+      "description": "Single overall 1-5 star rating and optional feedback from one judge for one team.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 256, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "judgeId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "judgeUid": { "type": "string", "maxLength": 128 },
+        "teamId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "rating": { "type": "integer" },
+        "comment": { "type": "string", "maxLength": 1000 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "id",
+        "judgeId",
+        "judgeUid",
+        "teamId",
+        "rating",
+        "comment",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "PublishedLeaderboard": {
+      "title": "PublishedLeaderboard",
+      "description": "Admin-published aggregate leaderboard document for projector and results screens.",
+      "type": "object",
+      "properties": {
+        "published": { "type": "boolean" },
+        "totalJudges": { "type": "integer" },
+        "totalTeams": { "type": "integer" },
+        "totalSubmissions": { "type": "integer" },
+        "entries": { "type": "array" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "published",
+        "totalJudges",
+        "totalTeams",
+        "totalSubmissions",
+        "entries",
+        "updatedAt"
+      ]
+    },
+    "AdminUser": {
+      "title": "AdminUser",
+      "description": "Authorized event administrator profile (unlimited admins with first-admin verification code and approval).",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "maxLength": 128 },
+        "email": { "type": "string", "maxLength": 160 },
+        "name": { "type": "string", "maxLength": 100 },
+        "isFirstAdmin": { "type": "boolean" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "email", "name", "createdAt"]
+    },
+    "AdminQuota": {
+      "title": "AdminQuota",
+      "description": "Publicly readable counter of registered administrators and first-admin identity without limits.",
+      "type": "object",
+      "properties": {
+        "count": { "type": "integer" },
+        "maxAdmins": { "type": "integer" },
+        "firstAdminEmail": { "type": "string", "maxLength": 160 },
+        "firstAdminUid": { "type": "string", "maxLength": 128 },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["count", "updatedAt"]
+    },
+    "AdminRequest": {
+      "title": "AdminRequest",
+      "description": "Administrator onboarding request requiring first admin verification code and approval.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "uid": { "type": "string", "maxLength": 128 },
+        "email": { "type": "string", "maxLength": 160 },
+        "name": { "type": "string", "maxLength": 100 },
+        "verificationCode": { "type": "string", "maxLength": 32 },
+        "status": { "type": "string", "enum": ["pending", "approved", "rejected"] },
+        "firstAdminEmail": { "type": "string", "maxLength": 160 },
+        "firstAdminUid": { "type": "string", "maxLength": 128 },
+        "requestedAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "id",
+        "uid",
+        "email",
+        "name",
+        "verificationCode",
+        "status",
+        "firstAdminEmail",
+        "firstAdminUid",
+        "requestedAt",
+        "updatedAt"
+      ]
+    },
+    "Participant": {
+      "title": "Participant",
+      "description": "Registered participant user profile authenticated via verified email and password.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "maxLength": 128 },
+        "email": { "type": "string", "maxLength": 160 },
+        "name": { "type": "string", "maxLength": 100 },
+        "teamName": { "type": "string", "maxLength": 100 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "email", "name", "teamName", "createdAt", "updatedAt"]
+    }
+  },
+  "firestore": {
+    "/settings/{settingId}": {
+      "schema": { "$ref": "#/entities/EventSettings" },
+      "description": "Global event settings and synchronized presentation timer state."
+    },
+    "/publicStats/{statId}": {
+      "schema": { "$ref": "#/entities/PublicSummary" },
+      "description": "Public summary statistics (total registered judges in /summary and admin slot count in /adminQuota)."
+    },
+    "/teams/{teamId}": {
+      "schema": { "$ref": "#/entities/Team" },
+      "description": "Participating student project teams and submission counts."
+    },
+    "/judges/{judgeId}": {
+      "schema": { "$ref": "#/entities/Judge" },
+      "description": "Registered judges and their bound Firebase Auth UID."
+    },
+    "/judgeCredentials/{judgeId}": {
+      "schema": { "$ref": "#/entities/JudgeCredential" },
+      "description": "Admin-managed secret access codes for judge verification."
+    },
+    "/judgeSessions/{sessionUid}": {
+      "schema": { "$ref": "#/entities/JudgeSession" },
+      "description": "Authenticated Firebase UID to Judge ID mapping."
+    },
+    "/evaluations/{evalId}": {
+      "schema": { "$ref": "#/entities/Evaluation" },
+      "description": "Confidential judge-team overall 1-5 ratings and optional comments."
+    },
+    "/publicResults/{resultId}": {
+      "schema": { "$ref": "#/entities/PublishedLeaderboard" },
+      "description": "Published team averages and rankings, gated by resultsPublished."
+    },
+    "/admins/{adminUid}": {
+      "schema": { "$ref": "#/entities/AdminUser" },
+      "description": "Authorized administrator accounts (unlimited, first-admin approval required)."
+    },
+    "/adminRequests/{requestId}": {
+      "schema": { "$ref": "#/entities/AdminRequest" },
+      "description": "Administrator onboarding requests gated by first-admin verification code and approval."
+    },
+    "/participants/{participantUid}": {
+      "schema": { "$ref": "#/entities/Participant" },
+      "description": "Verified email/password participant profiles with owner-only read and write access."
+    }
+  }
+}

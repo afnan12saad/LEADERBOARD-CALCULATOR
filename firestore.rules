@@ -1,0 +1,478 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Global Safety Net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Connection health check endpoint (read-only)
+    match /test/{docId} {
+      allow get: if docId == 'connection';
+    }
+
+    // --- Primitive Helpers ---
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function isValidEvalId(id) {
+      return id is string && id.size() >= 3 && id.size() <= 256 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isVerified() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    function isEmailPasswordUser() {
+      return isVerified() && request.auth.token.firebase.sign_in_provider == 'password';
+    }
+
+    function isBootstrappedAdmin() {
+      return isVerified() &&
+        (
+          request.auth.token.email == 'afnan12saad@gmail.com' ||
+          request.auth.token.email == 'anupamasgudagur@gmail.com'
+        ) &&
+        (
+          !exists(/databases/$(database)/documents/publicStats/adminQuota) ||
+          exists(/databases/$(database)/documents/admins/$(request.auth.uid))
+        );
+    }
+
+    function isAdmin() {
+      return isBootstrappedAdmin() || (
+        isVerified() &&
+        exists(/databases/$(database)/documents/admins/$(request.auth.uid))
+      );
+    }
+
+    function isResultsPublished() {
+      return exists(/databases/$(database)/documents/settings/event) &&
+        get(/databases/$(database)/documents/settings/event).data.resultsPublished == true;
+    }
+
+    function isSubmissionsOpen() {
+      return exists(/databases/$(database)/documents/settings/event) &&
+        get(/databases/$(database)/documents/settings/event).data.submissionsOpen == true;
+    }
+
+    function isEditingAllowed() {
+      return exists(/databases/$(database)/documents/settings/event) &&
+        get(/databases/$(database)/documents/settings/event).data.editingAllowed == true;
+    }
+
+    // --- Validation Blueprints ---
+    function isValidAdmin(data, adminUid) {
+      return data.keys().hasAll(['uid', 'email', 'name', 'createdAt']) &&
+        data.keys().hasOnly(['uid', 'email', 'name', 'createdAt', 'isFirstAdmin']) &&
+        data.uid == adminUid &&
+        data.uid is string && data.uid.size() >= 1 && data.uid.size() <= 128 &&
+        data.email is string && data.email.size() >= 3 && data.email.size() <= 160 &&
+        data.name is string && data.name.size() >= 1 && data.name.size() <= 100 &&
+        (!('isFirstAdmin' in data) || data.isFirstAdmin is bool) &&
+        data.createdAt is timestamp;
+    }
+
+    function isValidAdminQuota(data) {
+      return data.keys().hasAll(['count', 'updatedAt']) &&
+        data.keys().hasOnly(['count', 'maxAdmins', 'firstAdminEmail', 'firstAdminUid', 'updatedAt']) &&
+        data.count is int && data.count >= 0 && data.count <= 1000 &&
+        (!('maxAdmins' in data) || data.maxAdmins is int) &&
+        (!('firstAdminEmail' in data) || (data.firstAdminEmail is string && data.firstAdminEmail.size() <= 160)) &&
+        (!('firstAdminUid' in data) || (data.firstAdminUid is string && data.firstAdminUid.size() <= 128)) &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidAdminRequest(data, requestId) {
+      return data.keys().hasAll([
+          'id', 'uid', 'email', 'name', 'verificationCode', 'status',
+          'firstAdminEmail', 'firstAdminUid', 'requestedAt', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'id', 'uid', 'email', 'name', 'verificationCode', 'status',
+          'firstAdminEmail', 'firstAdminUid', 'requestedAt', 'updatedAt',
+          'approvedAt', 'approvedBy'
+        ]) &&
+        data.id == requestId &&
+        isValidId(data.id) &&
+        data.uid == requestId &&
+        data.uid is string && data.uid.size() >= 1 && data.uid.size() <= 128 &&
+        data.email is string && data.email.size() >= 3 && data.email.size() <= 160 &&
+        data.name is string && data.name.size() >= 1 && data.name.size() <= 100 &&
+        data.verificationCode is string && data.verificationCode.size() >= 4 && data.verificationCode.size() <= 32 &&
+        data.status is string && data.status in ['pending', 'approved', 'rejected'] &&
+        data.firstAdminEmail is string && data.firstAdminEmail.size() <= 160 &&
+        data.firstAdminUid is string && data.firstAdminUid.size() <= 128 &&
+        data.requestedAt is timestamp &&
+        data.updatedAt is timestamp &&
+        (!('approvedAt' in data) || data.approvedAt is timestamp) &&
+        (!('approvedBy' in data) || (data.approvedBy is string && data.approvedBy.size() <= 160));
+    }
+
+    function isValidEventSettings(data) {
+      return data.keys().hasAll([
+          'eventName', 'collegeName', 'tagline', 'venue', 'eventDate', 'customDomain',
+          'submissionsOpen', 'editingAllowed', 'resultsPublished', 'tieBreakerMode',
+          'currentTeamId', 'timerDurationSeconds', 'timerWarningSeconds',
+          'timerRemainingSeconds', 'timerRunning', 'timerStartedAtMs', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'eventName', 'collegeName', 'tagline', 'venue', 'eventDate', 'customDomain',
+          'submissionsOpen', 'editingAllowed', 'resultsPublished', 'tieBreakerMode',
+          'currentTeamId', 'timerDurationSeconds', 'timerWarningSeconds',
+          'timerRemainingSeconds', 'timerRunning', 'timerStartedAtMs', 'updatedAt'
+        ]) &&
+        data.eventName is string && data.eventName.size() >= 1 && data.eventName.size() <= 120 &&
+        data.collegeName is string && data.collegeName.size() >= 1 && data.collegeName.size() <= 140 &&
+        data.tagline is string && data.tagline.size() <= 120 &&
+        data.venue is string && data.venue.size() <= 140 &&
+        data.eventDate is string && data.eventDate.size() <= 60 &&
+        data.customDomain is string && data.customDomain.size() <= 200 &&
+        data.submissionsOpen is bool &&
+        data.editingAllowed is bool &&
+        data.resultsPublished is bool &&
+        data.tieBreakerMode is string && data.tieBreakerMode in ['tie', 'admin_order'] &&
+        data.currentTeamId is string && data.currentTeamId.size() <= 128 &&
+        data.timerDurationSeconds is int && data.timerDurationSeconds >= 0 && data.timerDurationSeconds <= 86400 &&
+        data.timerWarningSeconds is int && data.timerWarningSeconds >= 0 && data.timerWarningSeconds <= 43200 &&
+        data.timerRemainingSeconds is int && data.timerRemainingSeconds >= 0 && data.timerRemainingSeconds <= 86400 &&
+        data.timerRunning is bool &&
+        data.timerStartedAtMs is int && data.timerStartedAtMs >= 0 &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidPublicSummary(data) {
+      return data.keys().hasAll(['totalJudges', 'updatedAt']) &&
+        data.keys().hasOnly(['totalJudges', 'updatedAt']) &&
+        data.totalJudges is int && data.totalJudges >= 0 && data.totalJudges <= 1000 &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidTeam(data, teamId) {
+      return data.keys().hasAll([
+          'id', 'name', 'projectTitle', 'description', 'logoUrl',
+          'presentationStatus', 'orderIndex', 'tieBreakerRank',
+          'submittedCount', 'createdAt', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'id', 'name', 'projectTitle', 'description', 'logoUrl',
+          'presentationStatus', 'orderIndex', 'tieBreakerRank',
+          'submittedCount', 'createdAt', 'updatedAt'
+        ]) &&
+        data.id == teamId &&
+        isValidId(data.id) &&
+        data.name is string && data.name.size() >= 1 && data.name.size() <= 100 &&
+        data.projectTitle is string && data.projectTitle.size() >= 1 && data.projectTitle.size() <= 160 &&
+        data.description is string && data.description.size() <= 500 &&
+        data.logoUrl is string && data.logoUrl.size() <= 200000 &&
+        data.presentationStatus is string && data.presentationStatus in ['Waiting', 'Presenting', 'Completed'] &&
+        data.orderIndex is int && data.orderIndex >= 0 && data.orderIndex <= 1000 &&
+        data.tieBreakerRank is int && data.tieBreakerRank >= 0 && data.tieBreakerRank <= 1000 &&
+        data.submittedCount is int && data.submittedCount >= 0 && data.submittedCount <= 10000 &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidJudge(data, judgeId) {
+      return data.keys().hasAll([
+          'id', 'judgeCode', 'name', 'department', 'email', 'uid', 'active', 'createdAt', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'id', 'judgeCode', 'name', 'department', 'email', 'uid', 'active', 'createdAt', 'updatedAt'
+        ]) &&
+        data.id == judgeId &&
+        isValidId(data.id) &&
+        data.judgeCode is string && data.judgeCode.size() >= 2 && data.judgeCode.size() <= 32 && data.judgeCode.matches('^[A-Z0-9_\\-]+$') &&
+        data.name is string && data.name.size() >= 1 && data.name.size() <= 100 &&
+        data.department is string && data.department.size() <= 100 &&
+        data.email is string && data.email.size() <= 160 &&
+        data.uid is string && data.uid.size() <= 128 &&
+        data.active is bool &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidJudgeCredential(data, judgeId) {
+      return data.keys().hasAll(['judgeId', 'accessCode', 'updatedAt']) &&
+        data.keys().hasOnly(['judgeId', 'accessCode', 'updatedAt']) &&
+        data.judgeId == judgeId &&
+        isValidId(data.judgeId) &&
+        data.accessCode is string && data.accessCode.size() >= 4 && data.accessCode.size() <= 64 &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidJudgeSession(data, sessionUid) {
+      return data.keys().hasAll(['uid', 'judgeId', 'accessCode', 'createdAt']) &&
+        data.keys().hasOnly(['uid', 'judgeId', 'accessCode', 'createdAt']) &&
+        data.uid == sessionUid &&
+        isValidId(data.judgeId) &&
+        data.accessCode is string && data.accessCode.size() >= 4 && data.accessCode.size() <= 64 &&
+        data.createdAt is timestamp;
+    }
+
+    function isValidEvaluation(data, evalId) {
+      return data.keys().hasAll([
+          'id', 'judgeId', 'judgeUid', 'teamId', 'rating', 'comment', 'createdAt', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'id', 'judgeId', 'judgeUid', 'teamId', 'rating', 'comment', 'createdAt', 'updatedAt'
+        ]) &&
+        data.id == evalId &&
+        isValidEvalId(data.id) &&
+        isValidId(data.judgeId) &&
+        isValidId(data.teamId) &&
+        data.id == (data.judgeId + '_' + data.teamId) &&
+        data.judgeUid is string && data.judgeUid.size() >= 1 && data.judgeUid.size() <= 128 &&
+        data.rating is int && data.rating >= 1 && data.rating <= 5 &&
+        data.comment is string && data.comment.size() <= 1000 &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidLeaderboard(data) {
+      return data.keys().hasAll(['published', 'totalJudges', 'totalTeams', 'totalSubmissions', 'entries', 'updatedAt']) &&
+        data.keys().hasOnly(['published', 'totalJudges', 'totalTeams', 'totalSubmissions', 'entries', 'updatedAt']) &&
+        data.published is bool &&
+        data.totalJudges is int && data.totalJudges >= 0 && data.totalJudges <= 1000 &&
+        data.totalTeams is int && data.totalTeams >= 0 && data.totalTeams <= 200 &&
+        data.totalSubmissions is int && data.totalSubmissions >= 0 && data.totalSubmissions <= 200000 &&
+        data.entries is list && data.entries.size() <= 100 &&
+        (data.entries.size() == 0 || data.entries[0] is map) &&
+        data.updatedAt is timestamp;
+    }
+
+    // --- Collection Rules ---
+
+    // 1. Admins (Unlimited organizers; First Admin direct registration, subsequent admins require first admin approval)
+    match /admins/{adminUid} {
+      allow get: if isValidId(adminUid) && (isAdmin() || (isVerified() && request.auth.uid == adminUid));
+      allow list: if isAdmin();
+      allow create: if isValidId(adminUid) &&
+        isValidAdmin(incoming(), adminUid) &&
+        incoming().createdAt == request.time &&
+        isEmailPasswordUser() &&
+        (
+          isAdmin() ||
+          (
+            request.auth.uid == adminUid &&
+            incoming().email == (request.auth.token.email is string ? request.auth.token.email : '') &&
+            (
+              !exists(/databases/$(database)/documents/publicStats/adminQuota) ||
+              get(/databases/$(database)/documents/publicStats/adminQuota).data.count == 0
+            )
+          ) ||
+          (
+            request.auth.uid == adminUid &&
+            incoming().email == (request.auth.token.email is string ? request.auth.token.email : '') &&
+            exists(/databases/$(database)/documents/adminRequests/$(adminUid)) &&
+            get(/databases/$(database)/documents/adminRequests/$(adminUid)).data.status == 'approved'
+          )
+        );
+      allow update: if isValidId(adminUid) && isAdmin() && isValidAdmin(incoming(), adminUid) && incoming().uid == existing().uid && incoming().createdAt == existing().createdAt;
+      allow delete: if isValidId(adminUid) && isAdmin() && adminUid != request.auth.uid;
+    }
+
+    // 2. Admin Join Requests (Gated by first-admin verification code and approval)
+    match /adminRequests/{requestId} {
+      allow get: if isValidId(requestId) && (isAdmin() || (isVerified() && request.auth.uid == requestId));
+      allow list: if isAdmin();
+      allow create: if isValidId(requestId) &&
+        isVerified() &&
+        request.auth.uid == requestId &&
+        isValidAdminRequest(incoming(), requestId) &&
+        incoming().status == 'pending' &&
+        incoming().requestedAt == request.time &&
+        incoming().updatedAt == request.time;
+      allow update: if isValidId(requestId) && isValidAdminRequest(incoming(), requestId) &&
+        incoming().id == existing().id &&
+        incoming().uid == existing().uid &&
+        incoming().requestedAt == existing().requestedAt &&
+        incoming().updatedAt == request.time && (
+          isAdmin() ||
+          (
+            isVerified() &&
+            request.auth.uid == requestId &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt', 'approvedAt', 'approvedBy']) &&
+            incoming().status == 'approved' &&
+            existing().verificationCode == incoming().verificationCode
+          )
+        );
+      allow delete: if isValidId(requestId) && isAdmin();
+    }
+
+    // 3. Event Settings (Publicly readable; Admin-only write)
+    match /settings/{settingId} {
+      allow get: if isValidId(settingId) && settingId == 'event';
+      allow list: if false;
+      allow create, update: if isValidId(settingId) && settingId == 'event' && isAdmin() && isValidEventSettings(incoming()) && incoming().updatedAt == request.time;
+      allow delete: if false;
+    }
+
+    // 4. Public Summary & Admin Quota (Public counts without PII)
+    match /publicStats/{statId} {
+      allow get: if isValidId(statId) && (statId == 'summary' || statId == 'adminQuota');
+      allow list: if false;
+      allow create: if isValidId(statId) && (
+        (statId == 'summary' && isValidPublicSummary(incoming()) && incoming().updatedAt == request.time && (
+          isAdmin() || (
+            isSignedIn() &&
+            incoming().totalJudges == 1 &&
+            !exists(/databases/$(database)/documents/judgeSessions/$(request.auth.uid)) &&
+            existsAfter(/databases/$(database)/documents/judgeSessions/$(request.auth.uid))
+          )
+        )) ||
+        (statId == 'adminQuota' && isValidAdminQuota(incoming()) && incoming().updatedAt == request.time && (
+          isAdmin() || (
+            isEmailPasswordUser() &&
+            incoming().count == 1 &&
+            !exists(/databases/$(database)/documents/admins/$(request.auth.uid)) &&
+            existsAfter(/databases/$(database)/documents/admins/$(request.auth.uid))
+          )
+        ))
+      );
+      allow update: if isValidId(statId) && (
+        (statId == 'summary' && isValidPublicSummary(incoming()) && incoming().updatedAt == request.time && (
+          isAdmin() || (
+            isSignedIn() &&
+            incoming().totalJudges == existing().totalJudges + 1 &&
+            !exists(/databases/$(database)/documents/judgeSessions/$(request.auth.uid)) &&
+            existsAfter(/databases/$(database)/documents/judgeSessions/$(request.auth.uid))
+          )
+        )) ||
+        (statId == 'adminQuota' && isValidAdminQuota(incoming()) && incoming().updatedAt == request.time && (
+          isAdmin() || (
+            isEmailPasswordUser() &&
+            incoming().count == existing().count + 1 &&
+            !exists(/databases/$(database)/documents/admins/$(request.auth.uid)) &&
+            existsAfter(/databases/$(database)/documents/admins/$(request.auth.uid))
+          )
+        ))
+      );
+      allow delete: if false;
+    }
+
+    // 5. Teams (Publicly readable; ONLY Admin can add, edit, or delete teams. Judges only increment submittedCount on evaluation create)
+    match /teams/{teamId} {
+      allow get: if isValidId(teamId);
+      allow list: if true;
+      allow create: if isValidId(teamId) && isAdmin() && isValidTeam(incoming(), teamId) && incoming().createdAt == request.time && incoming().updatedAt == request.time;
+      allow update: if isValidId(teamId) && isValidTeam(incoming(), teamId) && incoming().id == existing().id && incoming().createdAt == existing().createdAt && incoming().updatedAt == request.time && (
+        isAdmin() || (
+          isSignedIn() &&
+          isSubmissionsOpen() &&
+          incoming().diff(existing()).affectedKeys().hasOnly(['submittedCount', 'updatedAt']) &&
+          incoming().submittedCount == existing().submittedCount + 1 &&
+          exists(/databases/$(database)/documents/judgeSessions/$(request.auth.uid)) &&
+          !exists(/databases/$(database)/documents/evaluations/$(get(/databases/$(database)/documents/judgeSessions/$(request.auth.uid)).data.judgeId + '_' + teamId)) &&
+          existsAfter(/databases/$(database)/documents/evaluations/$(get(/databases/$(database)/documents/judgeSessions/$(request.auth.uid)).data.judgeId + '_' + teamId))
+        )
+      );
+      allow delete: if isValidId(teamId) && isAdmin();
+    }
+
+    // 6. Judges (PII isolated to Admin or owning Judge; self-registration with Name + Email via Anonymous Auth)
+    match /judges/{judgeId} {
+      allow get: if isValidId(judgeId) && (isAdmin() || (isSignedIn() && resource.data.uid == request.auth.uid));
+      allow list: if isAdmin() || (isSignedIn() && resource.data.uid == request.auth.uid);
+      allow create: if isValidId(judgeId) && isValidJudge(incoming(), judgeId) && incoming().createdAt == request.time && incoming().updatedAt == request.time && (
+        isAdmin() || (
+          isSignedIn() &&
+          incoming().uid == request.auth.uid &&
+          incoming().active == true &&
+          incoming().email.size() >= 3 &&
+          existsAfter(/databases/$(database)/documents/judgeSessions/$(request.auth.uid)) &&
+          getAfter(/databases/$(database)/documents/judgeSessions/$(request.auth.uid)).data.judgeId == judgeId
+        )
+      );
+      allow update: if isValidId(judgeId) && isValidJudge(incoming(), judgeId) && incoming().id == existing().id && incoming().createdAt == existing().createdAt && incoming().updatedAt == request.time && (
+        isAdmin() || (
+          isSignedIn() &&
+          existing().active == true &&
+          existing().uid == request.auth.uid &&
+          incoming().diff(existing()).affectedKeys().hasOnly(['name', 'email', 'updatedAt']) &&
+          incoming().name.size() >= 1 &&
+          incoming().email.size() >= 3
+        )
+      );
+      allow delete: if isValidId(judgeId) && isAdmin();
+    }
+
+    // 7. Judge Credentials (Legacy collection: Strictly Admin-only)
+    match /judgeCredentials/{judgeId} {
+      allow get: if isValidId(judgeId) && isAdmin();
+      allow list: if isAdmin();
+      allow create, update: if isValidId(judgeId) && isAdmin() && isValidJudgeCredential(incoming(), judgeId) && incoming().updatedAt == request.time;
+      allow delete: if isValidId(judgeId) && isAdmin();
+    }
+
+    // 8. Judge Sessions (Maps Firebase Auth UID -> Judge ID for self-registered judges)
+    match /judgeSessions/{sessionUid} {
+      allow get: if isValidId(sessionUid) && (isAdmin() || (isSignedIn() && request.auth.uid == sessionUid));
+      allow list: if isAdmin();
+      allow create: if isValidId(sessionUid) && isSignedIn() && sessionUid == request.auth.uid &&
+        isValidJudgeSession(incoming(), sessionUid) &&
+        incoming().uid == request.auth.uid &&
+        incoming().createdAt == request.time &&
+        existsAfter(/databases/$(database)/documents/judges/$(incoming().judgeId)) &&
+        getAfter(/databases/$(database)/documents/judges/$(incoming().judgeId)).data.uid == request.auth.uid &&
+        getAfter(/databases/$(database)/documents/judges/$(incoming().judgeId)).data.active == true;
+      allow update: if isValidId(sessionUid) && isAdmin() && isValidJudgeSession(incoming(), sessionUid) && incoming().createdAt == existing().createdAt;
+      allow delete: if isValidId(sessionUid) && (isAdmin() || (isSignedIn() && request.auth.uid == sessionUid));
+    }
+
+    // 9. Evaluations (Confidential 1-5 ratings; Admin or owning Judge only)
+    match /evaluations/{evalId} {
+      allow get: if isValidEvalId(evalId) && (isAdmin() || (isSignedIn() && resource.data.judgeUid == request.auth.uid));
+      allow list: if isAdmin() || (isSignedIn() && resource.data.judgeUid == request.auth.uid);
+      allow create: if isValidEvalId(evalId) && isSignedIn() && isValidEvaluation(incoming(), evalId) &&
+        incoming().judgeUid == request.auth.uid &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time &&
+        isSubmissionsOpen() &&
+        exists(/databases/$(database)/documents/judgeSessions/$(request.auth.uid)) &&
+        get(/databases/$(database)/documents/judgeSessions/$(request.auth.uid)).data.judgeId == incoming().judgeId &&
+        exists(/databases/$(database)/documents/judges/$(incoming().judgeId)) &&
+        get(/databases/$(database)/documents/judges/$(incoming().judgeId)).data.active == true &&
+        get(/databases/$(database)/documents/judges/$(incoming().judgeId)).data.uid == request.auth.uid &&
+        exists(/databases/$(database)/documents/teams/$(incoming().teamId)) &&
+        getAfter(/databases/$(database)/documents/teams/$(incoming().teamId)).data.submittedCount == get(/databases/$(database)/documents/teams/$(incoming().teamId)).data.submittedCount + 1;
+      allow update: if isValidEvalId(evalId) && isValidEvaluation(incoming(), evalId) &&
+        incoming().id == existing().id &&
+        incoming().judgeId == existing().judgeId &&
+        incoming().judgeUid == existing().judgeUid &&
+        incoming().teamId == existing().teamId &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time && (
+          isAdmin() || (
+            isSignedIn() &&
+            existing().judgeUid == request.auth.uid &&
+            isSubmissionsOpen() &&
+            isEditingAllowed() &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['rating', 'comment', 'updatedAt'])
+          )
+        );
+      allow delete: if isValidEvalId(evalId) && isAdmin();
+    }
+
+    // 10. Published Leaderboard (Gated strictly by resultsPublished == true)
+    match /publicResults/{resultId} {
+      allow get: if isValidId(resultId) && resultId == 'leaderboard' && (isAdmin() || isResultsPublished());
+      allow list: if false;
+      allow create, update: if isValidId(resultId) && resultId == 'leaderboard' && isAdmin() && isValidLeaderboard(incoming()) && incoming().updatedAt == request.time;
+      allow delete: if isValidId(resultId) && resultId == 'leaderboard' && isAdmin();
+    }
+  }
+}
