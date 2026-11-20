@@ -1,4 +1,6 @@
 import type {
+  CriteriaScores,
+  CriterionId,
   Evaluation,
   EventSettings,
   Judge,
@@ -15,6 +17,47 @@ export const STAR_LABELS: Record<1 | 2 | 3 | 4 | 5, string> = {
   4: 'Very Good',
   5: 'Excellent',
 };
+
+export const CRITERIA: { id: CriterionId; label: string }[] = [
+  { id: 'c1', label: 'Innovation & Originality' },
+  { id: 'c2', label: 'Problem Relevance & Impact' },
+  { id: 'c3', label: 'Technical Implementation' },
+  { id: 'c4', label: 'Presentation & Communication' },
+  { id: 'c5', label: 'Feasibility & Scalability' },
+];
+// Per-criterion range 0-5 (user-confirmed: zero is allowed). Keep in sync
+// with the criteria range in firestore.rules.
+export const MIN_CRITERION_SCORE = 0;
+export const MAX_CRITERION_SCORE = 5;
+export const MAX_TOTAL_SCORE = CRITERIA.length * MAX_CRITERION_SCORE;
+
+export function isValidCriterionScore(v: unknown): v is number {
+  return (
+    typeof v === 'number' &&
+    Number.isInteger(v) &&
+    v >= MIN_CRITERION_SCORE &&
+    v <= MAX_CRITERION_SCORE
+  );
+}
+
+export function isValidCriteriaScores(c: unknown): c is CriteriaScores {
+  if (!c || typeof c !== 'object') return false;
+  const rec = c as Record<string, unknown>;
+  return CRITERIA.every(({ id }) => isValidCriterionScore(rec[id]));
+}
+
+export function sumCriteria(c: CriteriaScores): number {
+  return CRITERIA.reduce((acc, { id }) => acc + c[id], 0);
+}
+
+/** True for evaluations on the five-criteria scale with a consistent total. */
+export function isScoredEvaluation(ev: Evaluation): boolean {
+  return (
+    ev.scoreVersion === 2 &&
+    isValidCriteriaScores(ev.criteria) &&
+    ev.total === sumCriteria(ev.criteria)
+  );
+}
 
 export function isValidStarRating(value: unknown): value is 1 | 2 | 3 | 4 | 5 {
   return (
@@ -33,23 +76,29 @@ export function calculateLeaderboard(
   // the legacy 'admin_order' mode is ignored, even if it is stored in settings.
   _legacyTieBreakerMode?: TieBreakerMode,
 ): LeaderboardEntry[] {
-  const grouped = new Map<string, { sum: number; count: number }>();
+  const grouped = new Map<
+    string,
+    { sum: number; count: number; legacy: number }
+  >();
 
   for (const team of teams) {
-    grouped.set(team.id, { sum: 0, count: 0 });
+    grouped.set(team.id, { sum: 0, count: 0, legacy: 0 });
   }
 
   for (const ev of evaluations) {
-    if (!isValidStarRating(ev.rating)) continue;
     const bucket = grouped.get(ev.teamId);
-    if (bucket) {
-      bucket.sum += ev.rating;
+    if (!bucket) continue;
+    if (isScoredEvaluation(ev)) {
+      bucket.sum += ev.total as number;
       bucket.count += 1;
+    } else if (isValidStarRating(ev.rating)) {
+      // Old single 1-5 rating: a different scale, never mixed into the total.
+      bucket.legacy += 1;
     }
   }
 
   const raw = teams.map((team) => {
-    const stats = grouped.get(team.id) ?? { sum: 0, count: 0 };
+    const stats = grouped.get(team.id) ?? { sum: 0, count: 0, legacy: 0 };
     // Rank and display use the SAME value: the average rounded to 2 decimals.
     const averageRating =
       stats.count > 0
@@ -59,6 +108,7 @@ export function calculateLeaderboard(
       team,
       ratingSum: stats.sum,
       submittedCount: stats.count,
+      legacyCount: stats.legacy,
       averageRating,
       averageFormatted: stats.count > 0 ? averageRating.toFixed(2) : '0.00',
     };
@@ -109,6 +159,7 @@ export function calculateLeaderboard(
       averageFormatted: item.averageFormatted,
       ratingSum: item.ratingSum,
       submittedCount: item.submittedCount,
+      legacyCount: item.legacyCount,
       totalJudges,
     });
   }
@@ -141,7 +192,7 @@ export function calculateDashboardMetrics(
     if (
       teamIds.has(ev.teamId) &&
       judgeIds.has(ev.judgeId) &&
-      isValidStarRating(ev.rating)
+      isScoredEvaluation(ev)
     ) {
       totalSubmitted += 1;
     }
