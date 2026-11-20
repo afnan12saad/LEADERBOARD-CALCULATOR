@@ -15,32 +15,18 @@ import { PodiumShowcase } from '../components/PodiumShowcase';
 import { useArenaAuth } from '../context/ArenaAuthContext';
 import {
   DEFAULT_EVENT_SETTINGS,
-  publishOrHideResults,
   subscribeAllEvaluations,
   subscribeAllJudges,
-  subscribePublishedLeaderboard,
 } from '../services/arenaService';
-import type { Evaluation, Judge, PublishedLeaderboard } from '../types/arena';
+import type { Evaluation, Judge } from '../types/arena';
 import { calculateLeaderboard } from '../utils/scoring';
 
 export function ProjectorPage() {
   const { settings, publicSummary, teams, isAdmin, judgeProfile } =
     useArenaAuth();
-  const [publishedBoard, setPublishedBoard] =
-    useState<PublishedLeaderboard | null>(null);
   const [adminJudges, setAdminJudges] = useState<Judge[]>([]);
   const [adminEvaluations, setAdminEvaluations] = useState<Evaluation[]>([]);
-  const [releaseBusy, setReleaseBusy] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
-
-  const resultsPublished = Boolean(settings?.resultsPublished);
-
-  useEffect(() => {
-    return subscribePublishedLeaderboard(
-      (board) => setPublishedBoard(board),
-      resultsPublished || isAdmin,
-    );
-  }, [resultsPublished, isAdmin]);
 
   useEffect(() => {
     if (!isAdmin) {
@@ -69,22 +55,6 @@ export function ProjectorPage() {
       await document.documentElement.requestFullscreen().catch(() => {});
     } else {
       await document.exitFullscreen().catch(() => {});
-    }
-  };
-
-  const handleReleaseResults = async () => {
-    if (!isAdmin) return;
-    setReleaseBusy(true);
-    try {
-      await publishOrHideResults({
-        publish: true,
-        teams,
-        judges: adminJudges,
-        evaluations: adminEvaluations,
-        settings: settings ?? { ...DEFAULT_EVENT_SETTINGS },
-      });
-    } finally {
-      setReleaseBusy(false);
     }
   };
 
@@ -121,13 +91,7 @@ export function ProjectorPage() {
     settings?.tieBreakerMode,
   ]);
 
-  const showPublished =
-    resultsPublished &&
-    publishedBoard &&
-    publishedBoard.published &&
-    publishedBoard.entries.length > 0;
-
-  const showAdminOnlyPreview = isAdmin && !resultsPublished;
+  const showAdminOnlyPreview = isAdmin;
 
   return (
     <div className="min-h-screen flex flex-col bg-[#071422] text-slate-100">
@@ -222,27 +186,7 @@ export function ProjectorPage() {
         </section>
 
         {/* Leaderboard Area */}
-        {showPublished ? (
-          <section className="space-y-6 animate-reveal">
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 max-w-4xl mx-auto">
-              <div className="flex items-center gap-2.5">
-                <Award className="w-6 h-6 text-[#F5B942]" />
-                <h2 className="text-2xl sm:text-3xl font-display font-bold text-white">
-                  Official Top 2 Winners & Standings
-                </h2>
-              </div>
-              <p className="text-sm text-slate-400">
-                Ranked by average overall star rating (out of 5)
-              </p>
-            </div>
-
-            <PodiumShowcase
-              entries={publishedBoard.entries}
-              teams={teams}
-              showProjectTitle
-            />
-          </section>
-        ) : showAdminOnlyPreview ? (
+        {showAdminOnlyPreview ? (
           <section className="space-y-6 animate-reveal">
             <div className="max-w-4xl mx-auto p-5 rounded-xl bg-[#0D1E33] border border-[#F5B942]/60 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
               <div className="flex items-center gap-3.5">
@@ -251,23 +195,14 @@ export function ProjectorPage() {
                 </div>
                 <div>
                   <h2 className="text-lg font-display font-bold text-white">
-                    Admin-Only Live Leaderboard Preview
+                    Live Leaderboard (Admin Only)
                   </h2>
                   <p className="text-sm text-slate-300">
-                    Hidden from judges and participants. Click Release Final
-                    Results when ready to show the Top 2 winners to everyone.
+                    Visible only while signed in as an admin. Judges and other
+                    users cannot open it. Show this screen on the event display.
                   </p>
                 </div>
               </div>
-              <button
-                type="button"
-                disabled={releaseBusy}
-                onClick={() => void handleReleaseResults()}
-                className="min-h-[44px] inline-flex items-center justify-center gap-2 px-5 py-2.5 rounded-lg bg-[#16A34A] text-white text-sm font-semibold hover:bg-[#15803d] transition-colors shrink-0 disabled:opacity-60"
-              >
-                <Eye className="w-4 h-4" />
-                {releaseBusy ? 'Releasing...' : 'Release Results to All Users'}
-              </button>
             </div>
 
             {adminLiveEntries.length > 0 ? (
@@ -293,9 +228,8 @@ export function ProjectorPage() {
             </h2>
             <p className="text-sm text-slate-300 max-w-xl mx-auto leading-relaxed">
               Team rankings, average scores, and leaderboard results remain
-              hidden from judges and participants during evaluation. Once the
-              Event Admin releases the final results at the end, the Top 2
-              winners will appear here automatically.
+              visible only to signed-in administrators. Sign in as an admin to
+              view and project the live leaderboard.
             </p>
             {judgeProfile && (
               <div className="pt-2">
