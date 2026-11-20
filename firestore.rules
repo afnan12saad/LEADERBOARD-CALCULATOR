@@ -223,20 +223,47 @@ service cloud.firestore {
         data.createdAt is timestamp;
     }
 
+    // Five-criteria scores: each 0-5, total is the exact sum (0-25).
+    function isValidCriterion(v) {
+      return v is int && v >= 0 && v <= 5;
+    }
+
+    function isValidCriteriaMap(c) {
+      return c is map &&
+        c.keys().hasAll(['c1', 'c2', 'c3', 'c4', 'c5']) &&
+        c.keys().hasOnly(['c1', 'c2', 'c3', 'c4', 'c5']) &&
+        isValidCriterion(c.c1) && isValidCriterion(c.c2) && isValidCriterion(c.c3) &&
+        isValidCriterion(c.c4) && isValidCriterion(c.c5);
+    }
+
+    function isScoreShapeValid(data) {
+      return (
+        // Legacy single 1-5 rating (existing documents)
+        (
+          data.keys().hasAll(['id', 'judgeId', 'judgeUid', 'teamId', 'rating', 'comment', 'createdAt', 'updatedAt']) &&
+          data.keys().hasOnly(['id', 'judgeId', 'judgeUid', 'teamId', 'rating', 'comment', 'createdAt', 'updatedAt']) &&
+          data.rating is int && data.rating >= 1 && data.rating <= 5
+        ) ||
+        // Version 2: five criteria
+        (
+          data.keys().hasAll(['id', 'judgeId', 'judgeUid', 'teamId', 'scoreVersion', 'criteria', 'total', 'comment', 'createdAt', 'updatedAt']) &&
+          data.keys().hasOnly(['id', 'judgeId', 'judgeUid', 'teamId', 'scoreVersion', 'criteria', 'total', 'comment', 'createdAt', 'updatedAt']) &&
+          data.scoreVersion == 2 &&
+          isValidCriteriaMap(data.criteria) &&
+          data.total is int &&
+          data.total == data.criteria.c1 + data.criteria.c2 + data.criteria.c3 + data.criteria.c4 + data.criteria.c5
+        )
+      );
+    }
+
     function isValidEvaluation(data, evalId) {
-      return data.keys().hasAll([
-          'id', 'judgeId', 'judgeUid', 'teamId', 'rating', 'comment', 'createdAt', 'updatedAt'
-        ]) &&
-        data.keys().hasOnly([
-          'id', 'judgeId', 'judgeUid', 'teamId', 'rating', 'comment', 'createdAt', 'updatedAt'
-        ]) &&
+      return isScoreShapeValid(data) &&
         data.id == evalId &&
         isValidEvalId(data.id) &&
         isValidId(data.judgeId) &&
         isValidId(data.teamId) &&
         data.id == (data.judgeId + '_' + data.teamId) &&
         data.judgeUid is string && data.judgeUid.size() >= 1 && data.judgeUid.size() <= 128 &&
-        data.rating is int && data.rating >= 1 && data.rating <= 5 &&
         data.comment is string && data.comment.size() <= 1000 &&
         data.createdAt is timestamp &&
         data.updatedAt is timestamp;
@@ -427,7 +454,7 @@ service cloud.firestore {
       allow delete: if isValidId(sessionUid) && (isAdmin() || (isSignedIn() && request.auth.uid == sessionUid));
     }
 
-    // 9. Evaluations (Confidential 1-5 ratings; Admin or owning Judge only)
+    // 9. Evaluations (Confidential five-criteria scores; Admin or owning Judge only)
     match /evaluations/{evalId} {
       allow get: if isValidEvalId(evalId) && (isAdmin() || (isSignedIn() && resource.data.judgeUid == request.auth.uid));
       allow list: if isAdmin() || (isSignedIn() && resource.data.judgeUid == request.auth.uid);
@@ -455,7 +482,9 @@ service cloud.firestore {
             existing().judgeUid == request.auth.uid &&
             isSubmissionsOpen() &&
             isEditingAllowed() &&
-            incoming().diff(existing()).affectedKeys().hasOnly(['rating', 'comment', 'updatedAt'])
+            incoming().diff(existing()).affectedKeys().hasOnly(['rating', 'criteria', 'total', 'comment', 'updatedAt']) &&
+            // A document keeps its score version: no converting legacy <-> v2 by edit.
+            (('scoreVersion' in existing()) == ('scoreVersion' in incoming()))
           )
         );
       allow delete: if isValidEvalId(evalId) && isAdmin();
@@ -478,7 +507,7 @@ service cloud.firestore {
     match /eventArchives/{archiveId} {
       allow get, list: if isAdmin();
       allow create: if isValidId(archiveId) && isAdmin() &&
-        incoming().keys().hasOnly(['eventName', 'archivedAt', 'archivedBy', 'totalJudges', 'totalTeams', 'totalSubmissions', 'entries']) &&
+        incoming().keys().hasOnly(['eventName', 'archivedAt', 'archivedBy', 'totalJudges', 'totalTeams', 'totalSubmissions', 'entries', 'scoreMax', 'legacyMax', 'legacyRatings']) &&
         incoming().keys().hasAll(['eventName', 'archivedAt', 'archivedBy', 'totalJudges', 'totalTeams', 'totalSubmissions', 'entries']) &&
         incoming().eventName is string && incoming().eventName.size() <= 160 &&
         incoming().archivedBy is string && incoming().archivedBy.size() <= 160 &&
@@ -486,7 +515,10 @@ service cloud.firestore {
         incoming().totalJudges is int && incoming().totalJudges >= 0 && incoming().totalJudges <= 100000 &&
         incoming().totalTeams is int && incoming().totalTeams >= 0 && incoming().totalTeams <= 200 &&
         incoming().totalSubmissions is int && incoming().totalSubmissions >= 0 && incoming().totalSubmissions <= 1000000 &&
-        incoming().entries is list && incoming().entries.size() <= 100;
+        incoming().entries is list && incoming().entries.size() <= 100 &&
+        (!('scoreMax' in incoming()) || incoming().scoreMax is int) &&
+        (!('legacyMax' in incoming()) || incoming().legacyMax is int) &&
+        (!('legacyRatings' in incoming()) || (incoming().legacyRatings is int && incoming().legacyRatings >= 0));
       allow update, delete: if false;
     }
   }
