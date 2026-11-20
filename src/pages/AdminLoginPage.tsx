@@ -41,7 +41,6 @@ export function AdminLoginPage() {
     resendAdminVerificationEmail,
     refreshAdminVerification,
     sendAdminPasswordReset,
-    verifyAdminCode,
     logoutAll,
   } = useArenaAuth();
 
@@ -50,14 +49,12 @@ export function AdminLoginPage() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
-  const [verificationCodeInput, setVerificationCodeInput] = useState('');
 
   const [showSignInPassword, setShowSignInPassword] = useState(false);
   const [showRegisterPassword, setShowRegisterPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
 
   const [busy, setBusy] = useState(false);
-  const [codeBusy, setCodeBusy] = useState(false);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
 
@@ -215,32 +212,6 @@ export function AdminLoginPage() {
       );
     } finally {
       setBusy(false);
-    }
-  };
-
-  const handleVerifyCodeSubmit = async (e: FormEvent) => {
-    e.preventDefault();
-    if (!verificationCodeInput.trim()) {
-      setError('Enter the 6-digit verification code.');
-      return;
-    }
-    setError('');
-    setNotice('');
-    setCodeBusy(true);
-    try {
-      const success = await verifyAdminCode(verificationCodeInput.trim());
-      if (success) {
-        setNotice('Verification code accepted! Admin access activated.');
-        navigate('/admin');
-      }
-    } catch (err) {
-      setError(
-        err instanceof Error
-          ? err.message
-          : 'Invalid verification code. Please check with the primary administrator.',
-      );
-    } finally {
-      setCodeBusy(false);
     }
   };
 
@@ -441,46 +412,11 @@ export function AdminLoginPage() {
                 )}
               </div>
 
-              {/* Code Entry Form */}
-              <form
-                onSubmit={(e) => void handleVerifyCodeSubmit(e)}
-                className="bg-[#081422] p-4 rounded-xl border border-[#1F3D64] space-y-3"
-              >
-                <div className="space-y-1">
-                  <label
-                    htmlFor="admin-verify-code"
-                    className="block text-xs font-semibold text-slate-200"
-                  >
-                    Enter 6-Digit Verification Code
-                  </label>
-                  <p className="text-[11px] text-slate-400 leading-relaxed">
-                    If the primary administrator provided you with the 6-digit
-                    code from their email, enter it below to activate access:
-                  </p>
-                </div>
-
-                <div className="relative">
-                  <input
-                    id="admin-verify-code"
-                    type="text"
-                    required
-                    maxLength={12}
-                    value={verificationCodeInput}
-                    onChange={(e) => setVerificationCodeInput(e.target.value)}
-                    placeholder="Enter code (e.g. 582914)"
-                    className={`${inputClass} tracking-widest text-center text-lg font-mono-tabular font-bold`}
-                  />
-                </div>
-
-                <button
-                  type="submit"
-                  disabled={codeBusy || !verificationCodeInput.trim()}
-                  className="w-full min-h-[44px] inline-flex items-center justify-center gap-2 px-5 py-2.5 rounded-lg bg-[#2563EB] hover:bg-[#1d4ed8] text-white text-xs font-semibold transition-colors disabled:opacity-50"
-                >
-                  <ShieldCheck className="w-4 h-4" />
-                  {codeBusy ? 'Verifying Code...' : 'Verify Code & Activate Admin Access'}
-                </button>
-              </form>
+              <p className="bg-[#081422] p-4 rounded-xl border border-[#1F3D64] text-[11px] text-slate-300 leading-relaxed">
+                An existing administrator must approve your request in the
+                Admin Console. Once they do, press Check Approval Status below
+                to activate your access.
+              </p>
 
               <div className="flex flex-col sm:flex-row gap-3">
                 <button
