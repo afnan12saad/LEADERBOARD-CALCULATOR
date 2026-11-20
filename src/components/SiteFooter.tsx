@@ -5,7 +5,7 @@ export function SiteFooter() {
   const { settings, isAdmin } = useArenaAuth();
   const college =
     settings?.collegeName || 'Academic Project Evaluation Committee';
-  const canSeeLeaderboardLinks = isAdmin || Boolean(settings?.resultsPublished);
+  const canSeeLeaderboardLinks = isAdmin;
 
   return (
     <footer className="border-t border-[#183152] bg-[#06101B] mt-auto">
