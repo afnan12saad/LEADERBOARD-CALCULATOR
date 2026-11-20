@@ -74,10 +74,29 @@ service cloud.firestore {
         get(/databases/$(database)/documents/settings/event).data.editingAllowed == true;
     }
 
+
+    // --- Admin cap: at most five admin accounts (adminSlots/s1..s5) ---
+    // A new admin doc must carry slot "sN" and be created in the same batch as a
+    // free slot doc adminSlots/sN whose uid is that admin. A slot doc can only be
+    // created once (never overwritten) so one slot can never back two admins.
+    function slotDoc(slot) {
+      return /databases/$(database)/documents/adminSlots/$(slot);
+    }
+    function claimsFreeSlot(adminUid) {
+      return incoming().slot is string &&
+        !exists(slotDoc(incoming().slot)) &&
+        existsAfter(slotDoc(incoming().slot)) &&
+        getAfter(slotDoc(incoming().slot)).data.uid == adminUid;
+    }
+    function slotsReconciled() {
+      return exists(/databases/$(database)/documents/adminSlots/reconciled);
+    }
+
     // --- Validation Blueprints ---
     function isValidAdmin(data, adminUid) {
       return data.keys().hasAll(['uid', 'email', 'name', 'createdAt']) &&
-        data.keys().hasOnly(['uid', 'email', 'name', 'createdAt', 'isFirstAdmin']) &&
+        data.keys().hasOnly(['uid', 'email', 'name', 'createdAt', 'isFirstAdmin', 'slot']) &&
+        (!('slot' in data) || (data.slot is string && data.slot in ['s1','s2','s3','s4','s5'])) &&
         data.uid == adminUid &&
         data.uid is string && data.uid.size() >= 1 && data.uid.size() <= 128 &&
         data.email is string && data.email.size() >= 3 && data.email.size() <= 160 &&
@@ -291,25 +310,62 @@ service cloud.firestore {
         isValidAdmin(incoming(), adminUid) &&
         incoming().createdAt == request.time &&
         isEmailPasswordUser() &&
+        claimsFreeSlot(adminUid) &&
         (
-          isAdmin() ||
+          (slotsReconciled() && isAdmin()) ||
           (
             request.auth.uid == adminUid &&
             incoming().email == (request.auth.token.email is string ? request.auth.token.email : '') &&
+            !slotsReconciled() &&
             (
               !exists(/databases/$(database)/documents/publicStats/adminQuota) ||
               get(/databases/$(database)/documents/publicStats/adminQuota).data.count == 0
             )
           ) ||
           (
+            slotsReconciled() &&
             request.auth.uid == adminUid &&
             incoming().email == (request.auth.token.email is string ? request.auth.token.email : '') &&
             exists(/databases/$(database)/documents/adminRequests/$(adminUid)) &&
             get(/databases/$(database)/documents/adminRequests/$(adminUid)).data.status == 'approved'
           )
         );
-      allow update: if isValidId(adminUid) && isAdmin() && isValidAdmin(incoming(), adminUid) && incoming().uid == existing().uid && incoming().createdAt == existing().createdAt;
-      allow delete: if isValidId(adminUid) && isAdmin() && adminUid != request.auth.uid;
+      // Slot is immutable, except a one-time claim by an existing unslotted admin.
+      allow update: if isValidId(adminUid) && isAdmin() && isValidAdmin(incoming(), adminUid) && incoming().uid == existing().uid && incoming().createdAt == existing().createdAt &&
+        (
+          incoming().get('slot', null) == existing().get('slot', null) ||
+          (!('slot' in existing()) && claimsFreeSlot(adminUid))
+        );
+      // Deleting a slotted admin must free exactly that admin's slot in the same batch.
+      allow delete: if isValidId(adminUid) && isAdmin() && adminUid != request.auth.uid &&
+        (!('slot' in existing()) || !existsAfter(slotDoc(existing().slot)));
+    }
+
+    // 1b. Admin slots (cap of five). Written only together with the admin doc they back.
+    match /adminSlots/{slotId} {
+      allow get: if isAdmin() || (isVerified() && slotId in ['s1','s2','s3','s4','s5','reconciled']);
+      allow list: if isAdmin();
+      allow create: if (
+        slotId in ['s1','s2','s3','s4','s5'] &&
+        incoming().keys().hasOnly(['uid', 'createdAt']) &&
+        incoming().uid is string && incoming().createdAt == request.time &&
+        existsAfter(/databases/$(database)/documents/admins/$(incoming().uid)) &&
+        getAfter(/databases/$(database)/documents/admins/$(incoming().uid)).data.slot == slotId &&
+        (
+          !exists(/databases/$(database)/documents/admins/$(incoming().uid)) ||
+          !('slot' in get(/databases/$(database)/documents/admins/$(incoming().uid)).data)
+        )
+      ) || (
+        // Marker an admin sets once every pre-existing admin has been given a slot.
+        slotId == 'reconciled' && incoming().keys().hasOnly(['at']) && incoming().at == request.time &&
+        (isAdmin() ||
+          (!exists(/databases/$(database)/documents/admins/$(request.auth.uid)) &&
+           existsAfter(/databases/$(database)/documents/admins/$(request.auth.uid))))
+      );
+      allow update: if false;
+      // Freed only in the same batch that deletes the admin it belonged to.
+      allow delete: if isAdmin() && slotId != 'reconciled' &&
+        !existsAfter(/databases/$(database)/documents/admins/$(resource.data.uid));
     }
 
     // 2. Admin Join Requests (Gated by first-admin verification code and approval)
