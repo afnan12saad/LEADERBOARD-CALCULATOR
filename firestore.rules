@@ -533,6 +533,8 @@ service cloud.firestore {
           isAdmin() || (
             isSignedIn() &&
             existing().judgeUid == request.auth.uid &&
+            exists(/databases/$(database)/documents/judges/$(existing().judgeId)) &&
+            get(/databases/$(database)/documents/judges/$(existing().judgeId)).data.active == true &&
             isSubmissionsOpen() &&
             isEditingAllowed() &&
             incoming().diff(existing()).affectedKeys().hasOnly(['rating', 'criteria', 'total', 'comment', 'updatedAt']) &&
