@@ -33,8 +33,8 @@ export function HomePage() {
     (sum, t) => sum + (t.submittedCount || 0),
     0,
   );
-  const resultsReleased = Boolean(settings?.resultsPublished);
-  const canSeeLeaderboard = isAdmin || resultsReleased;
+  const resultsReleased = false; // results are never released to judges or the public
+  const canSeeLeaderboard = isAdmin;
 
   return (
     <div className="min-h-screen flex flex-col bg-[#071422] text-slate-100">
@@ -199,7 +199,7 @@ export function HomePage() {
                 03. Top 2 Winner Release
               </div>
               <h3 className="text-lg font-display font-bold text-white mb-2">
-                Confidential Until Released
+                Admin-Only Leaderboard
               </h3>
               <p className="text-sm text-slate-300 leading-relaxed">
                 Live rankings and results are visible exclusively to Event
