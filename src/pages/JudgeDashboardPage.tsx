@@ -99,7 +99,7 @@ export function JudgeDashboardPage() {
               Welcome, {judgeProfile.name}
             </h1>
             <p className="text-sm text-slate-300">
-              Select a participating team below to submit your single 1 to 5 star
+              Select a participating team below to score it on five criteria (0 to 5 each, total out of 25)
               overall presentation rating.
             </p>
           </div>
@@ -274,7 +274,7 @@ export function JudgeDashboardPage() {
                       {existingEval ? (
                         <span className="inline-flex items-center gap-1.5 font-semibold text-[#4ADE80]">
                           <CheckCircle2 className="w-3.5 h-3.5" />
-                          Submitted ({existingEval.rating}/5)
+                          Submitted ({existingEval.total ?? `${existingEval.rating} (old 1-5 scale)`}{existingEval.total !== undefined ? '/25' : ''})
                         </span>
                       ) : (
                         <span className="font-semibold text-slate-300">
