@@ -29,7 +29,9 @@ export function calculateLeaderboard(
   teams: Team[],
   evaluations: Evaluation[],
   totalJudges: number,
-  tieBreakerMode: TieBreakerMode = 'tie',
+  // Kept only so older callers still compile. Ties ALWAYS share a rank (1,1,3):
+  // the legacy 'admin_order' mode is ignored, even if it is stored in settings.
+  _legacyTieBreakerMode?: TieBreakerMode,
 ): LeaderboardEntry[] {
   const grouped = new Map<string, { sum: number; count: number }>();
 
@@ -48,13 +50,17 @@ export function calculateLeaderboard(
 
   const raw = teams.map((team) => {
     const stats = grouped.get(team.id) ?? { sum: 0, count: 0 };
-    const averageRating = stats.count > 0 ? stats.sum / stats.count : 0;
+    // Rank and display use the SAME value: the average rounded to 2 decimals.
+    const averageRating =
+      stats.count > 0
+        ? Math.round((stats.sum / stats.count) * 100 + 1e-9) / 100
+        : 0;
     return {
       team,
       ratingSum: stats.sum,
       submittedCount: stats.count,
       averageRating,
-      averageFormatted: stats.count > 0 ? averageRating.toFixed(1) : '0.0',
+      averageFormatted: stats.count > 0 ? averageRating.toFixed(2) : '0.00',
     };
   });
 
@@ -68,11 +74,6 @@ export function calculateLeaderboard(
       return diff;
     }
 
-    if (tieBreakerMode === 'admin_order') {
-      const tbDiff = a.team.tieBreakerRank - b.team.tieBreakerRank;
-      if (tbDiff !== 0) return tbDiff;
-    }
-
     const orderDiff = a.team.orderIndex - b.team.orderIndex;
     if (orderDiff !== 0) return orderDiff;
     return a.team.name.localeCompare(b.team.name);
@@ -84,7 +85,7 @@ export function calculateLeaderboard(
     let rank = i + 1;
     let isTied = false;
 
-    if (tieBreakerMode === 'tie' && i > 0) {
+    if (i > 0) {
       const prev = raw[i - 1];
       const sameScore =
         item.submittedCount > 0 &&
