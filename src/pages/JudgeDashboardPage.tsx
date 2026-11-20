@@ -192,7 +192,7 @@ export function JudgeDashboardPage() {
                 key={tab.key}
                 type="button"
                 onClick={() => setFilterMode(tab.key)}
-                className={`px-3.5 py-2 rounded-md text-xs font-semibold transition-colors whitespace-nowrap ${
+                className={`min-h-[44px] sm:min-h-[36px] px-3.5 py-2 rounded-md text-xs font-semibold transition-colors whitespace-nowrap ${
                   filterMode === tab.key
                     ? 'bg-[#2563EB] text-white'
                     : 'text-slate-300 hover:text-white'
