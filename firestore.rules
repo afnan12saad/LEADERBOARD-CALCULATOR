@@ -316,11 +316,8 @@ service cloud.firestore {
           (
             request.auth.uid == adminUid &&
             incoming().email == (request.auth.token.email is string ? request.auth.token.email : '') &&
-            !slotsReconciled() &&
-            (
-              !exists(/databases/$(database)/documents/publicStats/adminQuota) ||
-              get(/databases/$(database)/documents/publicStats/adminQuota).data.count == 0
-            )
+            // Fresh project only. The counter is forgeable, so an existing quota doc closes this path.
+            !exists(/databases/$(database)/documents/publicStats/adminQuota)
           ) ||
           (
             slotsReconciled() &&
@@ -356,11 +353,11 @@ service cloud.firestore {
           !('slot' in get(/databases/$(database)/documents/admins/$(incoming().uid)).data)
         )
       ) || (
-        // Marker an admin sets once every pre-existing admin has been given a slot.
+        // Marker proving the slot inventory is complete. Clients can only set it when bootstrapping a
+        // fresh project. For an existing installation it is set out-of-band after a trusted inventory.
         slotId == 'reconciled' && incoming().keys().hasOnly(['at']) && incoming().at == request.time &&
-        (isAdmin() ||
-          (!exists(/databases/$(database)/documents/admins/$(request.auth.uid)) &&
-           existsAfter(/databases/$(database)/documents/admins/$(request.auth.uid))))
+        !exists(/databases/$(database)/documents/publicStats/adminQuota) &&
+        existsAfter(/databases/$(database)/documents/admins/$(request.auth.uid))
       );
       allow update: if false;
       // Freed only in the same batch that deletes the admin it belonged to.
