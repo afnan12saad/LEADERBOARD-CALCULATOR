@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import {
+  Archive,
   Award,
   CheckCircle2,
   LayoutDashboard,
@@ -21,6 +22,7 @@ import { AdminTeamsPanel } from '../components/admin/AdminTeamsPanel';
 import { AdminJudgesPanel } from '../components/admin/AdminJudgesPanel';
 import { AdminControlsPanel } from '../components/admin/AdminControlsPanel';
 import { AdminQrPanel } from '../components/admin/AdminQrPanel';
+import { AdminArchivesPanel } from '../components/admin/AdminArchivesPanel';
 import { AdminResultsPanel } from '../components/admin/AdminResultsPanel';
 import { AdminSettingsPanel } from '../components/admin/AdminSettingsPanel';
 import { useArenaAuth } from '../context/ArenaAuthContext';
@@ -50,6 +52,7 @@ type AdminTab =
   | 'controls'
   | 'qr'
   | 'results'
+  | 'archives'
   | 'settings';
 
 export function AdminDashboardPage() {
@@ -157,6 +160,7 @@ export function AdminDashboardPage() {
       { key: 'controls', label: 'Event Timer & Controls', icon: Sliders },
       { key: 'qr', label: 'QR Code', icon: QrCode },
       { key: 'results', label: 'Results & Exports', icon: Award },
+      { key: 'archives', label: 'Archived Events', icon: Archive },
       { key: 'settings', label: 'Event Settings', icon: Settings },
     ];
 
@@ -545,6 +549,8 @@ export function AdminDashboardPage() {
                 onNotify={showToast}
               />
             )}
+
+            {activeTab === 'archives' && <AdminArchivesPanel />}
 
             {activeTab === 'settings' && (
               <AdminSettingsPanel
