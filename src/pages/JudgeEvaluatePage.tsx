@@ -164,7 +164,7 @@ export function JudgeEvaluatePage() {
       <main className="flex-1 max-w-2xl w-full mx-auto px-4 py-8 sm:py-10 space-y-5">
         <Link
           to="/judge/dashboard"
-          className="inline-flex items-center gap-2 text-sm font-semibold text-slate-300 hover:text-[#F5B942] transition-colors"
+          className="inline-flex items-center gap-2 min-h-[44px] text-sm font-semibold text-slate-300 hover:text-[#F5B942] transition-colors"
         >
           <ArrowLeft className="w-4 h-4" />
           Back to Team Selection
