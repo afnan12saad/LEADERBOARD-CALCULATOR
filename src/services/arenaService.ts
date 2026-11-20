@@ -1108,6 +1108,7 @@ export async function resetEventEvaluations(
 
 export async function initializeEverythingToZeroWith15Teams(
   existingSettings?: EventSettings | null,
+  options?: { onlyIfNoRatings?: boolean },
 ): Promise<void> {
   try {
     const [evalsSnap, teamsSnap, judgesSnap, sessionsSnap, credsSnap] =
@@ -1119,13 +1120,27 @@ export async function initializeEverythingToZeroWith15Teams(
         getDocs(collection(db, 'judgeCredentials')),
       ]);
 
-    const batch = writeBatch(db);
-    for (const d of evalsSnap.docs) batch.delete(d.ref);
-    for (const d of teamsSnap.docs) batch.delete(d.ref);
-    for (const d of judgesSnap.docs) batch.delete(d.ref);
-    for (const d of sessionsSnap.docs) batch.delete(d.ref);
-    for (const d of credsSnap.docs) batch.delete(d.ref);
+    // Automatic first-run setup must never wipe an event that already has ratings.
+    if (options?.onlyIfNoRatings && !evalsSnap.empty) return;
 
+    // A full event has thousands of ratings, so delete in modest chunks rather
+    // than one huge request (keeps each request small and a failure recoverable). The small final batch
+    // (default teams, settings, counters) runs last so a failure part-way
+    // never publishes a half-reset state as complete.
+    const toDelete = [
+      ...evalsSnap.docs,
+      ...judgesSnap.docs,
+      ...sessionsSnap.docs,
+      ...credsSnap.docs,
+      ...teamsSnap.docs,
+    ].map((d) => d.ref);
+    for (let i = 0; i < toDelete.length; i += 400) {
+      const chunk = writeBatch(db);
+      for (const ref of toDelete.slice(i, i + 400)) chunk.delete(ref);
+      await chunk.commit();
+    }
+
+    const batch = writeBatch(db);
     for (let i = 0; i < INITIAL_15_TEAMS.length; i += 1) {
       const t = INITIAL_15_TEAMS[i];
       batch.set(doc(db, 'teams', t.id), {
@@ -1177,6 +1192,68 @@ export async function initializeEverythingToZeroWith15Teams(
   } catch (err) {
     handleFirestoreError(err, OperationType.WRITE, 'settings/event');
   }
+}
+
+/**
+ * Save the current event's final standings (no judge emails, no individual
+ * ratings) to eventArchives so a reset never loses the results. Returns the
+ * archive id after confirming the document can be read back.
+ */
+export async function archiveCurrentEventResults(
+  settings: EventSettings,
+  archivedBy: string,
+): Promise<string> {
+  try {
+    const [teamsSnap, evalsSnap, judgesSnap] = await Promise.all([
+      getDocs(collection(db, 'teams')),
+      getDocs(collection(db, 'evaluations')),
+      getDocs(collection(db, 'judges')),
+    ]);
+    const teams = teamsSnap.docs.map((d) => d.data() as Team);
+    const evaluations = evalsSnap.docs.map((d) => d.data() as Evaluation);
+    const entries = calculateLeaderboard(
+      teams,
+      evaluations,
+      judgesSnap.size,
+    ).map((e) => ({
+      rank: e.rank,
+      isTied: e.isTied,
+      teamName: e.teamName,
+      projectTitle: e.projectTitle,
+      averageRating: e.averageRating,
+      averageFormatted: e.averageFormatted,
+      submittedCount: e.submittedCount,
+      totalJudges: e.totalJudges,
+    }));
+    const archiveId = `ev_${Date.now()}`;
+    const ref = doc(db, 'eventArchives', archiveId);
+    await setDoc(ref, {
+      eventName: (settings.eventName || 'Event').slice(0, 160),
+      archivedAt: serverTimestamp(),
+      archivedBy: archivedBy.slice(0, 160),
+      totalJudges: judgesSnap.size,
+      totalTeams: teams.length,
+      totalSubmissions: evaluations.length,
+      entries,
+    });
+    const check = await getDoc(ref);
+    if (!check.exists()) {
+      throw new Error('The archive could not be confirmed. Nothing was reset.');
+    }
+    return archiveId;
+  } catch (err) {
+    handleFirestoreError(err, OperationType.WRITE, 'eventArchives');
+  }
+}
+
+/** Archive the finished event, then reset for the next one. Admin accounts are kept. */
+export async function archiveAndStartNewEvent(
+  settings: EventSettings,
+  archivedBy: string,
+): Promise<string> {
+  const archiveId = await archiveCurrentEventResults(settings, archivedBy);
+  await initializeEverythingToZeroWith15Teams(settings);
+  return archiveId;
 }
 
 export async function resetAllEventDataToZero(
