@@ -256,7 +256,7 @@ export function AdminDashboardPage() {
                           showToast('Unable to approve admin request.');
                         }
                       }}
-                      className="px-3.5 py-1.5 rounded-lg bg-[#16A34A] hover:bg-[#15803D] text-white text-xs font-semibold transition-colors flex items-center gap-1.5"
+                      className="min-h-[44px] px-4 py-2 rounded-lg bg-[#16A34A] hover:bg-[#15803D] text-white text-xs font-semibold transition-colors flex items-center gap-1.5"
                     >
                       <CheckCircle2 className="w-3.5 h-3.5" />
                       Accept & Add Admin
@@ -271,7 +271,7 @@ export function AdminDashboardPage() {
                           showToast('Unable to decline request.');
                         }
                       }}
-                      className="px-3 py-1.5 rounded-lg border border-amber-700/50 bg-black/20 text-xs font-semibold text-amber-200 hover:bg-black/40 transition-colors"
+                      className="min-h-[44px] px-4 py-2 rounded-lg border border-amber-700/50 bg-black/20 text-xs font-semibold text-amber-200 hover:bg-black/40 transition-colors"
                     >
                       Decline
                     </button>
@@ -395,7 +395,7 @@ export function AdminDashboardPage() {
                       <button
                         type="button"
                         onClick={() => setActiveTab('controls')}
-                        className="text-xs font-semibold text-[#F5B942] hover:underline whitespace-nowrap"
+                        className="inline-flex items-center min-h-[44px] text-xs font-semibold text-[#F5B942] hover:underline whitespace-nowrap"
                       >
                         Manage Event Timer
                       </button>
@@ -418,7 +418,7 @@ export function AdminDashboardPage() {
                     <button
                       type="button"
                       onClick={() => setActiveTab('results')}
-                      className="text-xs font-semibold text-[#F5B942] hover:underline self-start sm:self-center"
+                      className="inline-flex items-center min-h-[44px] text-xs font-semibold text-[#F5B942] hover:underline self-start sm:self-center"
                     >
                       Open Audit Log & Exports
                     </button>
