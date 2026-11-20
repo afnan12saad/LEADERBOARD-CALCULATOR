@@ -3,8 +3,6 @@ import { Link, useNavigate } from 'react-router-dom';
 import {
   Award,
   CheckCircle2,
-  Eye,
-  EyeOff,
   LayoutDashboard,
   LogOut,
   MonitorPlay,
@@ -30,7 +28,6 @@ import {
   DEFAULT_EVENT_SETTINGS,
   initializeDefaultEventData,
   initializeEverythingToZeroWith15Teams,
-  publishOrHideResults,
   subscribeAllAdmins,
   subscribeAllEvaluations,
   subscribeAllJudges,
@@ -76,7 +73,6 @@ export function AdminDashboardPage() {
   const [judges, setJudges] = useState<Judge[]>([]);
   const [evaluations, setEvaluations] = useState<Evaluation[]>([]);
   const [toast, setToast] = useState('');
-  const [releaseBusy, setReleaseBusy] = useState(false);
   const zeroInitAttempted = useRef(false);
 
   const pendingRequests = useMemo(
@@ -132,47 +128,11 @@ export function AdminDashboardPage() {
     [teams, evaluations, metrics.totalJudges, effectiveSettings.tieBreakerMode],
   );
 
-  // Keep published leaderboard document synced if new ratings arrive while results are published
-  useEffect(() => {
-    if (!isAdmin || !settings?.resultsPublished) return;
-    const timer = window.setTimeout(() => {
-      void publishOrHideResults({
-        publish: true,
-        teams,
-        judges,
-        evaluations,
-        settings,
-      });
-    }, 600);
-    return () => window.clearTimeout(timer);
-  }, [isAdmin, settings, teams, judges, evaluations]);
-
   const showToast = (msg: string) => {
     setToast(msg);
     window.setTimeout(() => {
       setToast((prev) => (prev === msg ? '' : prev));
     }, 3500);
-  };
-
-  const handleToggleReleaseOverview = async () => {
-    setReleaseBusy(true);
-    try {
-      const nextPublish = !effectiveSettings.resultsPublished;
-      await publishOrHideResults({
-        publish: nextPublish,
-        teams,
-        judges,
-        evaluations,
-        settings: effectiveSettings,
-      });
-      showToast(
-        nextPublish
-          ? 'Final results released to all judges and participants.'
-          : 'Results hidden from judges and participants (Admin-only view).',
-      );
-    } finally {
-      setReleaseBusy(false);
-    }
   };
 
   if (!authReady || !isAdmin) {
@@ -417,40 +377,10 @@ export function AdminDashboardPage() {
                         <div className="text-xs font-semibold text-slate-400">
                           Whole Event Timer & Visibility
                         </div>
-                        <div
-                          className={`text-sm font-bold mt-0.5 ${
-                            effectiveSettings.resultsPublished
-                              ? 'text-[#4ADE80]'
-                              : 'text-[#F5B942]'
-                          }`}
-                        >
-                          {effectiveSettings.resultsPublished
-                            ? 'Final Results Released'
-                            : 'Leaderboard Admin-Only'}
+                        <div className="text-sm font-bold mt-0.5 text-[#F5B942]">
+                          Leaderboard Admin-Only
                         </div>
                       </div>
-                      <button
-                        type="button"
-                        disabled={releaseBusy}
-                        onClick={() => void handleToggleReleaseOverview()}
-                        className={`inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-xs font-semibold transition-colors ${
-                          effectiveSettings.resultsPublished
-                            ? 'border border-[#24436B] bg-[#091829] text-slate-200 hover:bg-[#102640]'
-                            : 'bg-[#16A34A] text-white hover:bg-[#15803d]'
-                        }`}
-                      >
-                        {effectiveSettings.resultsPublished ? (
-                          <>
-                            <EyeOff className="w-3.5 h-3.5" />
-                            Hide Results
-                          </>
-                        ) : (
-                          <>
-                            <Eye className="w-3.5 h-3.5" />
-                            Release Results
-                          </>
-                        )}
-                      </button>
                     </div>
 
                     <div className="flex items-center justify-between gap-3 pt-2 border-t border-[#183152]">
