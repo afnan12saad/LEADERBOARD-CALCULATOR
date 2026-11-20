@@ -38,16 +38,25 @@ export function AdminArchivesPanel({ refreshKey = 0 }: { refreshKey?: number }) 
           >
             <span className="font-semibold text-white">{a.eventName}</span>
             <span className="text-xs text-slate-400">
-              {a.archivedAtMs ? new Date(a.archivedAtMs).toLocaleString() : ''} | {a.totalJudges} judges | {a.totalSubmissions} ratings | by {a.archivedBy}
+              {a.archivedAtMs ? new Date(a.archivedAtMs).toLocaleString() : ''} | {a.totalJudges} judges | {a.totalSubmissions} submissions | by {a.archivedBy}
             </span>
           </button>
           {openId === a.id && (
+            <>
+            {(a.legacyRatings ?? 0) > 0 && (
+              <p className="px-4 py-2 text-xs text-amber-300 border-t border-[#1E3A5F]">
+                {a.legacyRatings} old single 1-{a.legacyMax ?? 5} ratings were in this event. They are shown in the last column on their own 1-{a.legacyMax ?? 5} scale and are not part of the /{a.scoreMax ?? 25} score.
+              </p>
+            )}
             <table className="w-full text-left text-sm border-t border-[#1E3A5F]">
               <thead>
                 <tr className="text-xs text-slate-400">
                   <th className="py-2 px-4">Rank</th>
                   <th className="py-2 px-4">Team</th>
-                  <th className="py-2 px-4 text-right">Average</th>
+                  <th className="py-2 px-4 text-right">Average (/{a.scoreMax ?? 5})</th>
+                  {(a.legacyRatings ?? 0) > 0 && (
+                    <th className="py-2 px-4 text-right">Old rating avg (/{a.legacyMax ?? 5})</th>
+                  )}
                 </tr>
               </thead>
               <tbody>
@@ -56,10 +65,16 @@ export function AdminArchivesPanel({ refreshKey = 0 }: { refreshKey?: number }) 
                     <td className="py-2 px-4 font-mono-tabular text-[#F5B942]">{e.rank}{e.isTied ? ' (tie)' : ''}</td>
                     <td className="py-2 px-4 text-slate-200">{e.teamName}{e.projectTitle ? ` - ${e.projectTitle}` : ''}</td>
                     <td className="py-2 px-4 text-right font-mono-tabular text-slate-200">{e.averageFormatted}</td>
+                    {(a.legacyRatings ?? 0) > 0 && (
+                      <td className="py-2 px-4 text-right font-mono-tabular text-slate-400">
+                        {e.legacyCount ? `${e.legacyAverageFormatted} (${e.legacyCount})` : '-'}
+                      </td>
+                    )}
                   </tr>
                 ))}
               </tbody>
             </table>
+            </>
           )}
         </div>
       ))}
