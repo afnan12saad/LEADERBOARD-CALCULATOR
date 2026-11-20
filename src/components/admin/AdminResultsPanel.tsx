@@ -22,7 +22,8 @@ import {
   exportLeaderboardCsv,
   exportLeaderboardPdf,
 } from '../../utils/exportReports';
-import { STAR_LABELS, isValidStarRating } from '../../utils/scoring';
+import { LegacyRatingsNotice } from './LegacyRatingsNotice';
+import { CRITERIA } from '../../utils/scoring';
 
 interface AdminResultsPanelProps {
   leaderboard: LeaderboardEntry[];
@@ -89,6 +90,7 @@ export function AdminResultsPanel({
 
   return (
     <div className="space-y-6">
+      <LegacyRatingsNotice entries={leaderboard} />
       {/* Release Control Banner */}
       <div className="bg-[#0D1E33] border border-[#1E3A5F] rounded-xl p-5 sm:p-6 flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div className="flex items-start gap-3.5">
@@ -187,7 +189,7 @@ export function AdminResultsPanel({
                   settings,
                 )
               }
-              className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-[#16A34A] text-white text-xs font-semibold hover:bg-[#15803d] transition-colors"
+              className="inline-flex items-center gap-2 min-h-[44px] px-4 py-2 rounded-lg bg-[#16A34A] text-white text-xs font-semibold hover:bg-[#15803d] transition-colors"
             >
               <FileSpreadsheet className="w-4 h-4" />
               Export Excel (.xlsx)
@@ -195,7 +197,7 @@ export function AdminResultsPanel({
             <button
               type="button"
               onClick={() => exportLeaderboardCsv(leaderboard, settings)}
-              className="inline-flex items-center gap-2 px-4 py-2 rounded-lg border border-[#24436B] bg-[#091829] text-slate-200 text-xs font-semibold hover:bg-[#102640] transition-colors"
+              className="inline-flex items-center gap-2 min-h-[44px] px-4 py-2 rounded-lg border border-[#24436B] bg-[#091829] text-slate-200 text-xs font-semibold hover:bg-[#102640] transition-colors"
             >
               <FileText className="w-4 h-4" />
               Export CSV
@@ -210,7 +212,7 @@ export function AdminResultsPanel({
                   totalPossible,
                 )
               }
-              className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-[#2563EB] text-white text-xs font-semibold hover:bg-[#1d4ed8] transition-colors"
+              className="inline-flex items-center gap-2 min-h-[44px] px-4 py-2 rounded-lg bg-[#2563EB] text-white text-xs font-semibold hover:bg-[#1d4ed8] transition-colors"
             >
               <FileText className="w-4 h-4" />
               Export PDF
@@ -227,7 +229,7 @@ export function AdminResultsPanel({
                 <th className="py-3 px-4">Project Title</th>
                 <th className="py-3 px-4 text-right">Sum</th>
                 <th className="py-3 px-4 text-right">Submissions</th>
-                <th className="py-3 px-4 text-right">Average (/5)</th>
+                <th className="py-3 px-4 text-right">Average (/25)</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-[#152B46] text-sm">
@@ -272,7 +274,7 @@ export function AdminResultsPanel({
                       {entry.submittedCount > 0 ? (
                         <span className="inline-flex items-center gap-1.5">
                           <Star className="w-4 h-4 fill-[#F5B942] text-[#F5B942]" />
-                          {entry.averageFormatted} / 5
+                          {entry.averageFormatted} / 25
                         </span>
                       ) : (
                         'Pending'
@@ -353,9 +355,11 @@ export function AdminResultsPanel({
                         {teamMap.get(ev.teamId)?.name ?? ev.teamId}
                       </td>
                       <td className="py-2.5 px-4 font-mono-tabular font-bold text-white">
-                        {ev.rating} / 5{' '}
+                        {ev.total !== undefined ? `${ev.total} / 25` : `${ev.rating} / 5`}{' '}
                         <span className="text-xs font-normal text-slate-400">
-                          ({isValidStarRating(ev.rating) ? STAR_LABELS[ev.rating] : ''})
+                          {ev.criteria
+                            ? `(${CRITERIA.map(({ id }) => ev.criteria?.[id]).join(' + ')})`
+                            : '(old 1-5 rating, not in standings)'}
                         </span>
                       </td>
                       <td className="py-2.5 px-4 text-xs text-slate-300 max-w-md">

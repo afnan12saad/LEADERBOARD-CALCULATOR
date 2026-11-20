@@ -180,7 +180,7 @@ export function AdminTeamsPanel({
                   setOrderIndex(nextNum);
                   setTieBreakerRank(nextNum);
                 }}
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-[#24436B] bg-[#091829] text-xs font-semibold text-[#F5B942] hover:bg-[#102640] transition-colors"
+                className="inline-flex items-center gap-1.5 min-h-[44px] px-3 py-1.5 rounded-lg border border-[#24436B] bg-[#091829] text-xs font-semibold text-[#F5B942] hover:bg-[#102640] transition-colors"
               >
                 <Plus className="w-3.5 h-3.5" />
                 Suggest Team {String(teams.length + 1).padStart(2, '0')}
@@ -400,7 +400,7 @@ export function AdminTeamsPanel({
                           type="button"
                           onClick={() => startEdit(team)}
                           aria-label={`Edit ${team.name}`}
-                          className="p-2 rounded-lg text-slate-300 hover:bg-[#163050] hover:text-white"
+                          className="min-w-[44px] min-h-[44px] inline-flex items-center justify-center rounded-lg text-slate-300 hover:bg-[#163050] hover:text-white"
                         >
                           <Edit2 className="w-4 h-4" />
                         </button>
@@ -408,7 +408,7 @@ export function AdminTeamsPanel({
                           type="button"
                           onClick={() => setDeleteTarget(team)}
                           aria-label={`Delete ${team.name}`}
-                          className="p-2 rounded-lg text-red-400 hover:bg-red-950/60"
+                          className="min-w-[44px] min-h-[44px] inline-flex items-center justify-center rounded-lg text-red-400 hover:bg-red-950/60"
                         >
                           <Trash2 className="w-4 h-4" />
                         </button>

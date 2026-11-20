@@ -74,10 +74,29 @@ service cloud.firestore {
         get(/databases/$(database)/documents/settings/event).data.editingAllowed == true;
     }
 
+
+    // --- Admin cap: at most five admin accounts (adminSlots/s1..s5) ---
+    // A new admin doc must carry slot "sN" and be created in the same batch as a
+    // free slot doc adminSlots/sN whose uid is that admin. A slot doc can only be
+    // created once (never overwritten) so one slot can never back two admins.
+    function slotDoc(slot) {
+      return /databases/$(database)/documents/adminSlots/$(slot);
+    }
+    function claimsFreeSlot(adminUid) {
+      return incoming().slot is string &&
+        !exists(slotDoc(incoming().slot)) &&
+        existsAfter(slotDoc(incoming().slot)) &&
+        getAfter(slotDoc(incoming().slot)).data.uid == adminUid;
+    }
+    function slotsReconciled() {
+      return exists(/databases/$(database)/documents/adminSlots/reconciled);
+    }
+
     // --- Validation Blueprints ---
     function isValidAdmin(data, adminUid) {
       return data.keys().hasAll(['uid', 'email', 'name', 'createdAt']) &&
-        data.keys().hasOnly(['uid', 'email', 'name', 'createdAt', 'isFirstAdmin']) &&
+        data.keys().hasOnly(['uid', 'email', 'name', 'createdAt', 'isFirstAdmin', 'slot']) &&
+        (!('slot' in data) || (data.slot is string && data.slot in ['s1','s2','s3','s4','s5'])) &&
         data.uid == adminUid &&
         data.uid is string && data.uid.size() >= 1 && data.uid.size() <= 128 &&
         data.email is string && data.email.size() >= 3 && data.email.size() <= 160 &&
@@ -223,20 +242,47 @@ service cloud.firestore {
         data.createdAt is timestamp;
     }
 
+    // Five-criteria scores: each 0-5, total is the exact sum (0-25).
+    function isValidCriterion(v) {
+      return v is int && v >= 0 && v <= 5;
+    }
+
+    function isValidCriteriaMap(c) {
+      return c is map &&
+        c.keys().hasAll(['c1', 'c2', 'c3', 'c4', 'c5']) &&
+        c.keys().hasOnly(['c1', 'c2', 'c3', 'c4', 'c5']) &&
+        isValidCriterion(c.c1) && isValidCriterion(c.c2) && isValidCriterion(c.c3) &&
+        isValidCriterion(c.c4) && isValidCriterion(c.c5);
+    }
+
+    function isScoreShapeValid(data) {
+      return (
+        // Legacy single 1-5 rating (existing documents)
+        (
+          data.keys().hasAll(['id', 'judgeId', 'judgeUid', 'teamId', 'rating', 'comment', 'createdAt', 'updatedAt']) &&
+          data.keys().hasOnly(['id', 'judgeId', 'judgeUid', 'teamId', 'rating', 'comment', 'createdAt', 'updatedAt']) &&
+          data.rating is int && data.rating >= 1 && data.rating <= 5
+        ) ||
+        // Version 2: five criteria
+        (
+          data.keys().hasAll(['id', 'judgeId', 'judgeUid', 'teamId', 'scoreVersion', 'criteria', 'total', 'comment', 'createdAt', 'updatedAt']) &&
+          data.keys().hasOnly(['id', 'judgeId', 'judgeUid', 'teamId', 'scoreVersion', 'criteria', 'total', 'comment', 'createdAt', 'updatedAt']) &&
+          data.scoreVersion == 2 &&
+          isValidCriteriaMap(data.criteria) &&
+          data.total is int &&
+          data.total == data.criteria.c1 + data.criteria.c2 + data.criteria.c3 + data.criteria.c4 + data.criteria.c5
+        )
+      );
+    }
+
     function isValidEvaluation(data, evalId) {
-      return data.keys().hasAll([
-          'id', 'judgeId', 'judgeUid', 'teamId', 'rating', 'comment', 'createdAt', 'updatedAt'
-        ]) &&
-        data.keys().hasOnly([
-          'id', 'judgeId', 'judgeUid', 'teamId', 'rating', 'comment', 'createdAt', 'updatedAt'
-        ]) &&
+      return isScoreShapeValid(data) &&
         data.id == evalId &&
         isValidEvalId(data.id) &&
         isValidId(data.judgeId) &&
         isValidId(data.teamId) &&
         data.id == (data.judgeId + '_' + data.teamId) &&
         data.judgeUid is string && data.judgeUid.size() >= 1 && data.judgeUid.size() <= 128 &&
-        data.rating is int && data.rating >= 1 && data.rating <= 5 &&
         data.comment is string && data.comment.size() <= 1000 &&
         data.createdAt is timestamp &&
         data.updatedAt is timestamp;
@@ -264,25 +310,59 @@ service cloud.firestore {
         isValidAdmin(incoming(), adminUid) &&
         incoming().createdAt == request.time &&
         isEmailPasswordUser() &&
+        claimsFreeSlot(adminUid) &&
         (
-          isAdmin() ||
+          (slotsReconciled() && isAdmin()) ||
           (
             request.auth.uid == adminUid &&
             incoming().email == (request.auth.token.email is string ? request.auth.token.email : '') &&
-            (
-              !exists(/databases/$(database)/documents/publicStats/adminQuota) ||
-              get(/databases/$(database)/documents/publicStats/adminQuota).data.count == 0
-            )
+            // Fresh project only. The counter is forgeable, so an existing quota doc closes this path.
+            !exists(/databases/$(database)/documents/publicStats/adminQuota)
           ) ||
           (
+            slotsReconciled() &&
             request.auth.uid == adminUid &&
             incoming().email == (request.auth.token.email is string ? request.auth.token.email : '') &&
             exists(/databases/$(database)/documents/adminRequests/$(adminUid)) &&
             get(/databases/$(database)/documents/adminRequests/$(adminUid)).data.status == 'approved'
           )
         );
-      allow update: if isValidId(adminUid) && isAdmin() && isValidAdmin(incoming(), adminUid) && incoming().uid == existing().uid && incoming().createdAt == existing().createdAt;
-      allow delete: if isValidId(adminUid) && isAdmin() && adminUid != request.auth.uid;
+      // Slot is immutable, except a one-time claim by an existing unslotted admin.
+      allow update: if isValidId(adminUid) && isAdmin() && isValidAdmin(incoming(), adminUid) && incoming().uid == existing().uid && incoming().createdAt == existing().createdAt &&
+        (
+          incoming().get('slot', null) == existing().get('slot', null) ||
+          (!('slot' in existing()) && claimsFreeSlot(adminUid))
+        );
+      // Deleting a slotted admin must free exactly that admin's slot in the same batch.
+      allow delete: if isValidId(adminUid) && isAdmin() && adminUid != request.auth.uid &&
+        (!('slot' in existing()) || !existsAfter(slotDoc(existing().slot)));
+    }
+
+    // 1b. Admin slots (cap of five). Written only together with the admin doc they back.
+    match /adminSlots/{slotId} {
+      allow get: if isAdmin() || (isVerified() && slotId in ['s1','s2','s3','s4','s5','reconciled']);
+      allow list: if isAdmin();
+      allow create: if (
+        slotId in ['s1','s2','s3','s4','s5'] &&
+        incoming().keys().hasOnly(['uid', 'createdAt']) &&
+        incoming().uid is string && incoming().createdAt == request.time &&
+        existsAfter(/databases/$(database)/documents/admins/$(incoming().uid)) &&
+        getAfter(/databases/$(database)/documents/admins/$(incoming().uid)).data.slot == slotId &&
+        (
+          !exists(/databases/$(database)/documents/admins/$(incoming().uid)) ||
+          !('slot' in get(/databases/$(database)/documents/admins/$(incoming().uid)).data)
+        )
+      ) || (
+        // Marker proving the slot inventory is complete. Clients can only set it when bootstrapping a
+        // fresh project. For an existing installation it is set out-of-band after a trusted inventory.
+        slotId == 'reconciled' && incoming().keys().hasOnly(['at']) && incoming().at == request.time &&
+        !exists(/databases/$(database)/documents/publicStats/adminQuota) &&
+        existsAfter(/databases/$(database)/documents/admins/$(request.auth.uid))
+      );
+      allow update: if false;
+      // Freed only in the same batch that deletes the admin it belonged to.
+      allow delete: if isAdmin() && slotId != 'reconciled' &&
+        !existsAfter(/databases/$(database)/documents/admins/$(resource.data.uid));
     }
 
     // 2. Admin Join Requests (Gated by first-admin verification code and approval)
@@ -300,16 +380,8 @@ service cloud.firestore {
         incoming().id == existing().id &&
         incoming().uid == existing().uid &&
         incoming().requestedAt == existing().requestedAt &&
-        incoming().updatedAt == request.time && (
-          isAdmin() ||
-          (
-            isVerified() &&
-            request.auth.uid == requestId &&
-            incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt', 'approvedAt', 'approvedBy']) &&
-            incoming().status == 'approved' &&
-            existing().verificationCode == incoming().verificationCode
-          )
-        );
+        incoming().updatedAt == request.time &&
+        isAdmin();
       allow delete: if isValidId(requestId) && isAdmin();
     }
 
@@ -390,6 +462,7 @@ service cloud.firestore {
       allow create: if isValidId(judgeId) && isValidJudge(incoming(), judgeId) && incoming().createdAt == request.time && incoming().updatedAt == request.time && (
         isAdmin() || (
           isSignedIn() &&
+          !exists(/databases/$(database)/documents/eventResets/current) &&
           incoming().uid == request.auth.uid &&
           incoming().active == true &&
           incoming().email.size() >= 3 &&
@@ -423,6 +496,7 @@ service cloud.firestore {
       allow get: if isValidId(sessionUid) && (isAdmin() || (isSignedIn() && request.auth.uid == sessionUid));
       allow list: if isAdmin();
       allow create: if isValidId(sessionUid) && isSignedIn() && sessionUid == request.auth.uid &&
+        !exists(/databases/$(database)/documents/eventResets/current) &&
         isValidJudgeSession(incoming(), sessionUid) &&
         incoming().uid == request.auth.uid &&
         incoming().createdAt == request.time &&
@@ -433,7 +507,7 @@ service cloud.firestore {
       allow delete: if isValidId(sessionUid) && (isAdmin() || (isSignedIn() && request.auth.uid == sessionUid));
     }
 
-    // 9. Evaluations (Confidential 1-5 ratings; Admin or owning Judge only)
+    // 9. Evaluations (Confidential five-criteria scores; Admin or owning Judge only)
     match /evaluations/{evalId} {
       allow get: if isValidEvalId(evalId) && (isAdmin() || (isSignedIn() && resource.data.judgeUid == request.auth.uid));
       allow list: if isAdmin() || (isSignedIn() && resource.data.judgeUid == request.auth.uid);
@@ -459,9 +533,13 @@ service cloud.firestore {
           isAdmin() || (
             isSignedIn() &&
             existing().judgeUid == request.auth.uid &&
+            exists(/databases/$(database)/documents/judges/$(existing().judgeId)) &&
+            get(/databases/$(database)/documents/judges/$(existing().judgeId)).data.active == true &&
             isSubmissionsOpen() &&
             isEditingAllowed() &&
-            incoming().diff(existing()).affectedKeys().hasOnly(['rating', 'comment', 'updatedAt'])
+            incoming().diff(existing()).affectedKeys().hasOnly(['rating', 'criteria', 'total', 'comment', 'updatedAt']) &&
+            // A document keeps its score version: no converting legacy <-> v2 by edit.
+            (('scoreVersion' in existing()) == ('scoreVersion' in incoming()))
           )
         );
       allow delete: if isValidEvalId(evalId) && isAdmin();
@@ -469,10 +547,34 @@ service cloud.firestore {
 
     // 10. Published Leaderboard (Gated strictly by resultsPublished == true)
     match /publicResults/{resultId} {
-      allow get: if isValidId(resultId) && resultId == 'leaderboard' && (isAdmin() || isResultsPublished());
+      allow get: if isValidId(resultId) && resultId == 'leaderboard' && isAdmin();
       allow list: if false;
       allow create, update: if isValidId(resultId) && resultId == 'leaderboard' && isAdmin() && isValidLeaderboard(incoming()) && incoming().updatedAt == request.time;
       allow delete: if isValidId(resultId) && resultId == 'leaderboard' && isAdmin();
+    }
+
+    // 12. Reset-in-progress marker. Admin only. Exists only while a "Start New Event" is running or unfinished.
+    match /eventResets/{resetId} {
+      allow get, list, create, update, delete: if resetId == 'current' && isAdmin();
+    }
+
+    // 11. Event Archives (results of finished events, saved before a reset). Admin-only, write-once.
+    match /eventArchives/{archiveId} {
+      allow get, list: if isAdmin();
+      allow create: if isValidId(archiveId) && isAdmin() &&
+        incoming().keys().hasOnly(['eventName', 'archivedAt', 'archivedBy', 'totalJudges', 'totalTeams', 'totalSubmissions', 'entries', 'scoreMax', 'legacyMax', 'legacyRatings']) &&
+        incoming().keys().hasAll(['eventName', 'archivedAt', 'archivedBy', 'totalJudges', 'totalTeams', 'totalSubmissions', 'entries']) &&
+        incoming().eventName is string && incoming().eventName.size() <= 160 &&
+        incoming().archivedBy is string && incoming().archivedBy.size() <= 160 &&
+        incoming().archivedAt == request.time &&
+        incoming().totalJudges is int && incoming().totalJudges >= 0 && incoming().totalJudges <= 100000 &&
+        incoming().totalTeams is int && incoming().totalTeams >= 0 && incoming().totalTeams <= 200 &&
+        incoming().totalSubmissions is int && incoming().totalSubmissions >= 0 && incoming().totalSubmissions <= 1000000 &&
+        incoming().entries is list && incoming().entries.size() <= 100 &&
+        (!('scoreMax' in incoming()) || incoming().scoreMax is int) &&
+        (!('legacyMax' in incoming()) || incoming().legacyMax is int) &&
+        (!('legacyRatings' in incoming()) || (incoming().legacyRatings is int && incoming().legacyRatings >= 0));
+      allow update, delete: if false;
     }
   }
 }

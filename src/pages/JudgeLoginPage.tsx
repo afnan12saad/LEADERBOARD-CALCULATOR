@@ -61,7 +61,7 @@ export function JudgeLoginPage() {
             </h1>
             <p className="text-sm text-slate-300 mt-1.5 leading-relaxed">
               Enter your full name and email address to select teams and submit
-              your 1 to 5 star overall project ratings. No password or ID code
+              your five-criteria project scores. No password or ID code
               required.
             </p>
           </div>

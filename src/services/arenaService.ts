@@ -7,6 +7,8 @@ import {
   onSnapshot,
   orderBy,
   query,
+  runTransaction,
+  type Transaction,
   serverTimestamp,
   setDoc,
   updateDoc,
@@ -25,6 +27,7 @@ import type {
   AdminQuota,
   AdminRequest,
   AdminUser,
+  CriteriaScores,
   Evaluation,
   EventSettings,
   Judge,
@@ -36,14 +39,22 @@ import type {
   Team,
 } from '../types/arena';
 import {
+  CRITERIA,
   INITIAL_15_TEAMS,
+  MAX_CRITERION_SCORE,
+  MIN_CRITERION_SCORE,
   MAX_ADMIN_USERS,
+  ADMIN_SLOT_IDS,
   MAX_WHOLE_EVENT_TIMER_SECONDS,
   calculateLeaderboard,
   generateJudgeIdFromUid,
   generateVerificationCode,
+  MAX_TOTAL_SCORE,
+  isScoredEvaluation,
   isValidStarRating,
+  isValidCriteriaScores,
   slugifyTeamId,
+  sumCriteria,
   validateJudgeNameAndEmail,
 } from '../utils/scoring';
 
@@ -269,36 +280,129 @@ export async function createAdminJoinRequest(params: {
   }
 }
 
+export interface AdminSlotUsage {
+  used: number;
+  max: number;
+  reconciled: boolean;
+  free: string[];
+}
+
+/** Reads the five slot docs. Slots are the enforced cap (see firestore.rules). */
+export async function getAdminSlotUsage(): Promise<AdminSlotUsage> {
+  try {
+    const [slots, rec] = await Promise.all([
+      Promise.all(ADMIN_SLOT_IDS.map((id) => getDoc(doc(db, 'adminSlots', id)))),
+      getDoc(doc(db, 'adminSlots', 'reconciled')),
+    ]);
+    const free = ADMIN_SLOT_IDS.filter((_, i) => !slots[i].exists());
+    return {
+      used: MAX_ADMIN_USERS - free.length,
+      max: MAX_ADMIN_USERS,
+      reconciled: rec.exists(),
+      free: [...free],
+    };
+  } catch (err) {
+    handleFirestoreError(err, OperationType.GET, 'adminSlots');
+  }
+}
+
+const ADMIN_FULL_MESSAGE =
+  'The maximum of 5 admin accounts is reached (or slots have not been reconciled yet). Remove an admin before adding another.';
+
+/** Tries each free slot in turn so a concurrent winner only costs us a retry. */
+async function commitAdminWithFreeSlot(
+  adminUid: string,
+  build: (batch: ReturnType<typeof writeBatch>, slot: string) => void,
+): Promise<string> {
+  const usage = await getAdminSlotUsage();
+  if (!usage.reconciled || usage.free.length === 0) {
+    throw new Error(ADMIN_FULL_MESSAGE);
+  }
+  let lastErr: unknown = null;
+  for (const slot of usage.free) {
+    const batch = writeBatch(db);
+    build(batch, slot);
+    batch.set(doc(db, 'adminSlots', slot), {
+      uid: adminUid,
+      createdAt: serverTimestamp(),
+    });
+    try {
+      await batch.commit();
+      return slot;
+    } catch (err) {
+      lastErr = err;
+    }
+  }
+  if (lastErr) {
+    throw new Error(ADMIN_FULL_MESSAGE);
+  }
+  throw new Error(ADMIN_FULL_MESSAGE);
+}
+
+/**
+ * Assigns a slot to every existing unslotted admin (nobody loses access). It does NOT
+ * mark the installation reconciled: new admins stay blocked until a trusted migration
+ * sets the adminSlots/reconciled marker after checking the full admin list.
+ * Refuses when more than five admins exist.
+ */
+export async function reconcileAdminSlots(): Promise<{ slotted: number }> {
+  const adminsSnap = await getDocs(collection(db, 'admins'));
+  const unslotted = adminsSnap.docs.filter((d) => !(d.data() as { slot?: string }).slot);
+  const taken = new Set(
+    adminsSnap.docs
+      .map((d) => (d.data() as { slot?: string }).slot)
+      .filter((x): x is string => Boolean(x)),
+  );
+  const free = ADMIN_SLOT_IDS.filter((id) => !taken.has(id));
+  if (adminsSnap.size > MAX_ADMIN_USERS || unslotted.length > free.length) {
+    throw new Error(
+      `There are ${adminsSnap.size} admin accounts, above the limit of 5. Remove accounts first; nothing was changed.`,
+    );
+  }
+  const batch = writeBatch(db);
+  unslotted.forEach((d, i) => {
+    batch.update(doc(db, 'admins', d.id), { slot: free[i] });
+    batch.set(doc(db, 'adminSlots', free[i]), {
+      uid: d.id,
+      createdAt: serverTimestamp(),
+    });
+  });
+  try {
+    await batch.commit();
+  } catch (err) {
+    handleFirestoreError(err, OperationType.WRITE, 'adminSlots');
+  }
+  return { slotted: unslotted.length };
+}
+
 export async function approveAdminJoinRequest(
   request: AdminRequest,
   approvedByEmail: string,
 ): Promise<void> {
-  const batch = writeBatch(db);
-  batch.update(doc(db, 'adminRequests', request.uid), {
-    status: 'approved',
-    approvedAt: serverTimestamp(),
-    approvedBy: approvedByEmail.trim().slice(0, 160),
-    updatedAt: serverTimestamp(),
-  });
-  batch.set(doc(db, 'admins', request.uid), {
-    uid: request.uid,
-    email: request.email,
-    name: request.name,
-    isFirstAdmin: false,
-    createdAt: serverTimestamp(),
-  });
-  batch.set(
-    doc(db, 'publicStats', 'adminQuota'),
-    {
-      count: increment(1),
-      updatedAt: serverTimestamp(),
-    },
-    { merge: true },
-  );
-
   try {
-    await batch.commit();
+    await commitAdminWithFreeSlot(request.uid, (batch, slot) => {
+      batch.update(doc(db, 'adminRequests', request.uid), {
+        status: 'approved',
+        approvedAt: serverTimestamp(),
+        approvedBy: approvedByEmail.trim().slice(0, 160),
+        updatedAt: serverTimestamp(),
+      });
+      batch.set(doc(db, 'admins', request.uid), {
+        uid: request.uid,
+        email: request.email,
+        name: request.name,
+        isFirstAdmin: false,
+        slot,
+        createdAt: serverTimestamp(),
+      });
+      batch.set(
+        doc(db, 'publicStats', 'adminQuota'),
+        { count: increment(1), updatedAt: serverTimestamp() },
+        { merge: true },
+      );
+    });
   } catch (err) {
+    if (err instanceof Error && err.message === ADMIN_FULL_MESSAGE) throw err;
     handleFirestoreError(err, OperationType.WRITE, `admins/${request.uid}`);
   }
 }
@@ -315,53 +419,6 @@ export async function rejectAdminJoinRequest(requestUid: string): Promise<void> 
       OperationType.UPDATE,
       `adminRequests/${requestUid}`,
     );
-  }
-}
-
-export async function verifyAdminCodeAndActivate(
-  user: User,
-  enteredCode: string,
-): Promise<boolean> {
-  const reqSnap = await getDoc(doc(db, 'adminRequests', user.uid));
-  if (!reqSnap.exists()) {
-    throw new Error('No pending administrator request found for your account.');
-  }
-  const req = reqSnap.data() as AdminRequest;
-  const cleanCode = enteredCode.trim().replace(/\s+/g, '');
-  if (req.verificationCode.trim() !== cleanCode) {
-    throw new Error(
-      'Invalid verification code. Please check the 6-digit code sent to the primary administrator.',
-    );
-  }
-
-  const batch = writeBatch(db);
-  batch.update(doc(db, 'adminRequests', user.uid), {
-    status: 'approved',
-    approvedAt: serverTimestamp(),
-    approvedBy: 'Verification Code Verification',
-    updatedAt: serverTimestamp(),
-  });
-  batch.set(doc(db, 'admins', user.uid), {
-    uid: user.uid,
-    email: req.email,
-    name: req.name,
-    isFirstAdmin: false,
-    createdAt: serverTimestamp(),
-  });
-  batch.set(
-    doc(db, 'publicStats', 'adminQuota'),
-    {
-      count: increment(1),
-      updatedAt: serverTimestamp(),
-    },
-    { merge: true },
-  );
-
-  try {
-    await batch.commit();
-    return true;
-  } catch (err) {
-    handleFirestoreError(err, OperationType.WRITE, `admins/${user.uid}`);
   }
 }
 
@@ -399,8 +456,14 @@ export async function claimAdminSlot(
       email: cleanEmail,
       name: cleanName,
       isFirstAdmin: true,
+      slot: 's1',
       createdAt: serverTimestamp(),
     });
+    batch.set(doc(db, 'adminSlots', 's1'), {
+      uid: user.uid,
+      createdAt: serverTimestamp(),
+    });
+    batch.set(doc(db, 'adminSlots', 'reconciled'), { at: serverTimestamp() });
     batch.set(
       doc(db, 'publicStats', 'adminQuota'),
       {
@@ -433,26 +496,24 @@ export async function claimAdminSlot(
     );
   }
 
-  const batch = writeBatch(db);
-  batch.set(doc(db, 'admins', user.uid), {
-    uid: user.uid,
-    email: cleanEmail,
-    name: cleanName,
-    isFirstAdmin: false,
-    createdAt: serverTimestamp(),
-  });
-  batch.set(
-    doc(db, 'publicStats', 'adminQuota'),
-    {
-      count: increment(1),
-      updatedAt: serverTimestamp(),
-    },
-    { merge: true },
-  );
-
   try {
-    await batch.commit();
+    await commitAdminWithFreeSlot(user.uid, (batch, slot) => {
+      batch.set(doc(db, 'admins', user.uid), {
+        uid: user.uid,
+        email: cleanEmail,
+        name: cleanName,
+        isFirstAdmin: false,
+        slot,
+        createdAt: serverTimestamp(),
+      });
+      batch.set(
+        doc(db, 'publicStats', 'adminQuota'),
+        { count: increment(1), updatedAt: serverTimestamp() },
+        { merge: true },
+      );
+    });
   } catch (err) {
+    if (err instanceof Error && err.message === ADMIN_FULL_MESSAGE) throw err;
     handleFirestoreError(err, OperationType.WRITE, `admins/${user.uid}`);
   }
 
@@ -467,8 +528,13 @@ export async function claimAdminSlot(
 export async function removeAdminAccount(targetUid: string): Promise<void> {
   try {
     const currentCount = await getLiveAdminQuotaCount();
+    const targetSnap = await getDoc(doc(db, 'admins', targetUid));
+    const targetSlot = targetSnap.exists()
+      ? (targetSnap.data() as { slot?: string }).slot
+      : undefined;
     const batch = writeBatch(db);
     batch.delete(doc(db, 'admins', targetUid));
+    if (targetSlot) batch.delete(doc(db, 'adminSlots', targetSlot));
     batch.set(
       doc(db, 'publicStats', 'adminQuota'),
       {
@@ -627,11 +693,6 @@ export async function registerJudgeByNameEmail(
     }
   }
 
-  const summarySnap = await getDoc(doc(db, 'publicStats', 'summary'));
-  const currentTotalJudges = summarySnap.exists()
-    ? Number((summarySnap.data() as PublicSummary).totalJudges || 0)
-    : 0;
-
   const judgeId = generateJudgeIdFromUid(user.uid);
   const batch = writeBatch(db);
   batch.set(doc(db, 'judges', judgeId), {
@@ -651,10 +712,18 @@ export async function registerJudgeByNameEmail(
     accessCode: 'SELF_AUTH',
     createdAt: serverTimestamp(),
   });
-  batch.set(doc(db, 'publicStats', 'summary'), {
-    totalJudges: Math.max(0, currentTotalJudges) + 1,
-    updatedAt: serverTimestamp(),
-  });
+  // Server-side increment with merge: no stale read, so simultaneous sign-ups
+  // all satisfy the rule `totalJudges == existing + 1` (first write creates 1).
+  // `merge: true` is required: a plain set() with increment() is rejected by
+  // the rules (verified in the Firestore emulator).
+  batch.set(
+    doc(db, 'publicStats', 'summary'),
+    {
+      totalJudges: increment(1),
+      updatedAt: serverTimestamp(),
+    },
+    { merge: true },
+  );
 
   try {
     await batch.commit();
@@ -724,18 +793,25 @@ export async function claimJudgeSlot(
   }
 }
 
-export async function submitOverallRating(params: {
+export async function submitCriteriaScores(params: {
   judgeId: string;
   judgeUid: string;
   teamId: string;
-  rating: number;
+  criteria: CriteriaScores;
   comment: string;
   isEdit: boolean;
 }): Promise<void> {
-  const { judgeId, judgeUid, teamId, rating, comment, isEdit } = params;
-  if (!isValidStarRating(rating)) {
-    throw new Error('Select an overall rating between 1 and 5 stars.');
+  const { judgeId, judgeUid, teamId, criteria, comment, isEdit } = params;
+  if (!isValidCriteriaScores(criteria)) {
+    throw new Error(
+      `Score every criterion from ${MIN_CRITERION_SCORE} to ${MAX_CRITERION_SCORE}.`,
+    );
   }
+  // Store exactly the five known keys, and a total computed here from them.
+  const clean = Object.fromEntries(
+    CRITERIA.map(({ id }) => [id, criteria[id]]),
+  ) as CriteriaScores;
+  const total = sumCriteria(clean);
 
   const cleanComment = comment.trim().slice(0, 1000);
   const evalId = `${judgeId}_${teamId}`;
@@ -744,7 +820,8 @@ export async function submitOverallRating(params: {
   if (isEdit) {
     try {
       await updateDoc(doc(db, 'evaluations', evalId), {
-        rating,
+        criteria: clean,
+        total,
         comment: cleanComment,
         updatedAt: serverTimestamp(),
       });
@@ -760,7 +837,9 @@ export async function submitOverallRating(params: {
     judgeId,
     judgeUid,
     teamId,
-    rating,
+    scoreVersion: 2,
+    criteria: clean,
+    total,
     comment: cleanComment,
     createdAt: serverTimestamp(),
     updatedAt: serverTimestamp(),
@@ -821,7 +900,8 @@ export async function saveEventSettings(
       submissionsOpen: Boolean(settings.submissionsOpen),
       editingAllowed: Boolean(settings.editingAllowed),
       resultsPublished: Boolean(settings.resultsPublished),
-      tieBreakerMode: settings.tieBreakerMode,
+      // Always 'tie': normalizes any legacy 'admin_order' value on save.
+      tieBreakerMode: 'tie',
       currentTeamId: settings.currentTeamId.slice(0, 128),
       timerDurationSeconds: Math.min(
         MAX_WHOLE_EVENT_TIMER_SECONDS,
@@ -1151,6 +1231,14 @@ export async function resetEventEvaluations(
 
 export async function initializeEverythingToZeroWith15Teams(
   existingSettings?: EventSettings | null,
+  options?: {
+    onlyIfNoRatings?: boolean;
+    expectedRatingCount?: number;
+    clearResetLock?: boolean;
+    beforeChunk?: () => Promise<void>;
+    // Runs inside the final transaction; throw to stop (used to prove this run still owns the reset).
+    finalGuard?: (tx: Transaction) => Promise<void>;
+  },
 ): Promise<void> {
   try {
     const [evalsSnap, teamsSnap, judgesSnap, sessionsSnap, credsSnap] =
@@ -1162,13 +1250,46 @@ export async function initializeEverythingToZeroWith15Teams(
         getDocs(collection(db, 'judgeCredentials')),
       ]);
 
-    const batch = writeBatch(db);
-    for (const d of evalsSnap.docs) batch.delete(d.ref);
-    for (const d of teamsSnap.docs) batch.delete(d.ref);
-    for (const d of judgesSnap.docs) batch.delete(d.ref);
-    for (const d of sessionsSnap.docs) batch.delete(d.ref);
-    for (const d of credsSnap.docs) batch.delete(d.ref);
+    // Automatic first-run setup must never wipe an event that already has ratings.
+    if (options?.onlyIfNoRatings && !evalsSnap.empty) return;
 
+    // If ratings changed since the archive was taken, stop before deleting anything.
+    if (
+      options?.expectedRatingCount !== undefined &&
+      evalsSnap.size !== options.expectedRatingCount
+    ) {
+      throw new Error(
+        'Ratings changed after the archive was saved. Nothing was reset. Try again.',
+      );
+    }
+
+    // A full event has thousands of ratings, so delete in modest chunks rather
+    // than one huge request (keeps each request small and a failure recoverable). The small final batch
+    // (default teams, settings, counters) runs last so a failure part-way
+    // never publishes a half-reset state as complete.
+    const toDelete = [
+      ...evalsSnap.docs,
+      ...judgesSnap.docs,
+      ...sessionsSnap.docs,
+      ...credsSnap.docs,
+      ...teamsSnap.docs,
+    ].map((d) => d.ref);
+    for (let i = 0; i < toDelete.length; i += 400) {
+      if (options?.beforeChunk) await options.beforeChunk();
+      const chunk = writeBatch(db);
+      for (const ref of toDelete.slice(i, i + 400)) chunk.delete(ref);
+      await chunk.commit();
+    }
+
+    const queued: Array<['set' | 'delete', ReturnType<typeof doc>, unknown?]> = [];
+    const batch = {
+      set: (ref: ReturnType<typeof doc>, data: unknown) => {
+        queued.push(['set', ref, data]);
+      },
+      delete: (ref: ReturnType<typeof doc>) => {
+        queued.push(['delete', ref]);
+      },
+    };
     for (let i = 0; i < INITIAL_15_TEAMS.length; i += 1) {
       const t = INITIAL_15_TEAMS[i];
       batch.set(doc(db, 'teams', t.id), {
@@ -1207,6 +1328,9 @@ export async function initializeEverythingToZeroWith15Teams(
       updatedAt: serverTimestamp(),
     });
 
+    // Only the last write of a finished reset clears the in-progress marker.
+    if (options?.clearResetLock) batch.delete(doc(db, 'eventResets', 'current'));
+
     batch.set(doc(db, 'publicResults', 'leaderboard'), {
       published: false,
       totalJudges: 0,
@@ -1216,9 +1340,337 @@ export async function initializeEverythingToZeroWith15Teams(
       updatedAt: serverTimestamp(),
     });
 
-    await batch.commit();
+    if (options?.finalGuard) {
+      // Ownership check and the final writes happen together, so an old worker
+      // that lost the reset to another session cannot reopen or reset settings.
+      await runTransaction(db, async (tx) => {
+        await options.finalGuard!(tx);
+        for (const [kind, ref, data] of queued) {
+          if (kind === 'set') tx.set(ref, data as Record<string, unknown>);
+          else tx.delete(ref);
+        }
+      });
+    } else {
+      const b = writeBatch(db);
+      for (const [kind, ref, data] of queued) {
+        if (kind === 'set') b.set(ref, data as Record<string, unknown>);
+        else b.delete(ref);
+      }
+      await b.commit();
+    }
   } catch (err) {
     handleFirestoreError(err, OperationType.WRITE, 'settings/event');
+  }
+}
+
+/**
+ * Save the current event's final standings (no judge emails, no individual
+ * ratings) to eventArchives so a reset never loses the results. Returns the
+ * archive id after confirming the document can be read back.
+ */
+export async function archiveCurrentEventResults(
+  settings: EventSettings,
+  archivedBy: string,
+): Promise<string> {
+  try {
+    const [teamsSnap, evalsSnap, judgesSnap] = await Promise.all([
+      getDocs(collection(db, 'teams')),
+      getDocs(collection(db, 'evaluations')),
+      getDocs(collection(db, 'judges')),
+    ]);
+    const teams = teamsSnap.docs.map((d) => d.data() as Team);
+    const evaluations = evalsSnap.docs.map((d) => d.data() as Evaluation);
+    const entries = calculateLeaderboard(
+      teams,
+      evaluations,
+      judgesSnap.size,
+    ).map((e) => {
+      // Old single 1-5 ratings are kept as their own standings (never /25).
+      const old = evaluations.filter(
+        (ev) =>
+          ev.teamId === e.teamId &&
+          !isScoredEvaluation(ev) &&
+          isValidStarRating(ev.rating),
+      );
+      const oldAvg = old.length
+        ? Math.round(
+            (old.reduce((a, ev) => a + (ev.rating as number), 0) / old.length) *
+              100 +
+              1e-9,
+          ) / 100
+        : null;
+      return {
+        rank: e.rank,
+        isTied: e.isTied,
+        teamName: e.teamName,
+        projectTitle: e.projectTitle,
+        averageRating: e.averageRating,
+        averageFormatted: e.averageFormatted,
+        submittedCount: e.submittedCount,
+        totalJudges: e.totalJudges,
+        legacyCount: old.length,
+        legacyAverageFormatted: oldAvg === null ? '' : oldAvg.toFixed(2),
+      };
+    });
+    const legacyRatings = evaluations.filter(
+      (ev) => !isScoredEvaluation(ev) && isValidStarRating(ev.rating),
+    ).length;
+    const archiveId = `ev_${Date.now()}`;
+    const ref = doc(db, 'eventArchives', archiveId);
+    await setDoc(ref, {
+      eventName: (settings.eventName || 'Event').slice(0, 160),
+      archivedAt: serverTimestamp(),
+      archivedBy: archivedBy.slice(0, 160),
+      totalJudges: judgesSnap.size,
+      totalTeams: teams.length,
+      totalSubmissions: evaluations.length,
+      entries,
+      // Scale of `averageFormatted` (five criteria, 0-25) and of the old
+      // single-rating averages kept in `legacyAverageFormatted` (1-5).
+      scoreMax: MAX_TOTAL_SCORE,
+      legacyMax: 5,
+      legacyRatings,
+    });
+    const check = await getDoc(ref);
+    const saved = check.data();
+    if (
+      !check.exists() ||
+      !saved ||
+      saved.totalSubmissions !== evaluations.length ||
+      !Array.isArray(saved.entries) ||
+      saved.entries.length !== entries.length
+    ) {
+      throw new Error('The archive could not be confirmed. Nothing was reset.');
+    }
+    return archiveId;
+  } catch (err) {
+    handleFirestoreError(err, OperationType.WRITE, 'eventArchives');
+  }
+}
+
+export interface ResetState {
+  status: 'archiving' | 'deleting';
+  archiveId: string;
+  expectedRatingCount: number;
+  startedBy: string;
+  updatedAtMs: number;
+}
+
+/** A running reset is trusted for this long; after that another admin may take over. */
+const RESET_LOCK_STALE_MS = 3 * 60 * 1000;
+
+/** Present while a reset has started but not finished. Admin only. */
+export async function getResetState(): Promise<ResetState | null> {
+  const snap = await getDoc(doc(db, 'eventResets', 'current'));
+  if (!snap.exists()) return null;
+  const x = snap.data();
+  return {
+    status: x.status === 'deleting' ? 'deleting' : 'archiving',
+    archiveId: String(x.archiveId ?? ''),
+    expectedRatingCount: Number(x.expectedRatingCount ?? 0),
+    startedBy: String(x.startedBy ?? ''),
+    updatedAtMs: Number(x.updatedAtMs ?? 0),
+  };
+}
+
+/**
+ * Archive the finished event, then reset for the next one. Admin accounts are kept.
+ *
+ * Safety rules:
+ * - Only one reset runs at a time (a marker document taken in a transaction).
+ * - Submissions are closed first so no rating can arrive mid-reset.
+ * - Before anything is deleted, a failure puts everything back (marker removed,
+ *   submissions reopened, nothing lost).
+ * - Once deleting has started, submissions stay closed and the marker stays.
+ *   Running this again resumes the SAME reset and reuses the original archive;
+ *   it never archives a half-deleted event.
+ */
+export async function archiveAndStartNewEvent(
+  settings: EventSettings,
+  archivedBy: string,
+): Promise<string> {
+  const lockRef = doc(db, 'eventResets', 'current');
+  const settingsRef = doc(db, 'settings', 'event');
+  const wasOpen = settings.submissionsOpen;
+
+  // Identifies this run. If another admin takes over a marker that looked abandoned,
+  // this run notices before its next delete and stops.
+  const token = `${Date.now().toString(36)}${Math.random().toString(36).slice(2)}`;
+
+  // 1. Take the marker (or resume a reset that already started deleting).
+  let resume: ResetState | null = null;
+  try {
+    await runTransaction(db, async (tx) => {
+      const snap = await tx.get(lockRef);
+      resume = null;
+      if (snap.exists()) {
+        const d = snap.data();
+        const fresh =
+          Date.now() - Number(d.updatedAtMs ?? 0) < RESET_LOCK_STALE_MS;
+        if (fresh) {
+          throw new Error(
+            'Another reset is already running. Wait a few minutes and try again.',
+          );
+        }
+        if (d.status === 'deleting') {
+          resume = {
+            status: 'deleting',
+            archiveId: String(d.archiveId ?? ''),
+            expectedRatingCount: Number(d.expectedRatingCount ?? 0),
+            startedBy: String(d.startedBy ?? ''),
+            updatedAtMs: Number(d.updatedAtMs ?? 0),
+          };
+        }
+      }
+      tx.set(lockRef, {
+        status: resume ? 'deleting' : 'archiving',
+        archiveId: resume ? (resume as ResetState).archiveId : '',
+        expectedRatingCount: resume
+          ? (resume as ResetState).expectedRatingCount
+          : 0,
+        startedBy: archivedBy.slice(0, 160),
+        owner: token,
+        updatedAtMs: Date.now(),
+      });
+    });
+  } catch (err) {
+    if (err instanceof Error && /already running/.test(err.message)) throw err;
+    handleFirestoreError(err, OperationType.WRITE, 'eventResets/current');
+  }
+
+  // Undo for failures that happen before anything is deleted.
+  const undo = async () => {
+    try {
+      await writeBatch(db).delete(lockRef).commit();
+      if (wasOpen) {
+        await updateDoc(settingsRef, {
+          submissionsOpen: true,
+          updatedAt: serverTimestamp(),
+        });
+      }
+    } catch {
+      /* the stale marker expires on its own; submissions can be reopened in Controls */
+    }
+  };
+
+  let archiveId: string;
+  if (resume) {
+    archiveId = (resume as ResetState).archiveId;
+  } else {
+    try {
+      // 2. Close submissions so no rating can arrive between archive and reset.
+      await updateDoc(settingsRef, {
+        submissionsOpen: false,
+        updatedAt: serverTimestamp(),
+      });
+      // 3. Save and verify the archive, then confirm nothing changed since.
+      archiveId = await archiveCurrentEventResults(settings, archivedBy);
+      const saved = await getDoc(doc(db, 'eventArchives', archiveId));
+      const archivedRatings = Number(saved.data()?.totalSubmissions ?? 0);
+      const now = await getDocs(collection(db, 'evaluations'));
+      if (now.size !== archivedRatings) {
+        throw new Error(
+          'Ratings changed after the archive was saved. Nothing was reset. Try again.',
+        );
+      }
+      // Point of no return: from here a failure keeps submissions closed.
+      await updateDoc(lockRef, {
+        status: 'deleting',
+        archiveId,
+        expectedRatingCount: archivedRatings,
+        updatedAtMs: Date.now(),
+      });
+    } catch (err) {
+      await undo();
+      throw err;
+    }
+  }
+
+  // 4. Delete and recreate. On failure the marker stays so this can be resumed.
+  try {
+    await initializeEverythingToZeroWith15Teams(
+      { ...settings, submissionsOpen: true },
+      {
+        clearResetLock: true,
+        finalGuard: async (tx) => {
+          const cur = await tx.get(lockRef);
+          if (!cur.exists() || cur.data().owner !== token) {
+            throw new Error(
+              'This reset was taken over by another admin session, so this one stopped.',
+            );
+          }
+        },
+        beforeChunk: async () => {
+          await runTransaction(db, async (tx) => {
+            const cur = await tx.get(lockRef);
+            if (!cur.exists() || cur.data().owner !== token) {
+              throw new Error(
+                'This reset was taken over by another admin session, so this one stopped.',
+              );
+            }
+            tx.update(lockRef, { updatedAtMs: Date.now() });
+          });
+        },
+      },
+    );
+  } catch (err) {
+    if (err instanceof Error && /taken over/.test(err.message)) throw err;
+    throw new Error(
+      'The reset did not finish. Your results are archived and submissions stay closed. Run Start New Event again to resume.',
+      { cause: err },
+    );
+  }
+  return archiveId;
+}
+
+export interface EventArchive {
+  id: string;
+  eventName: string;
+  archivedAtMs: number;
+  archivedBy: string;
+  totalJudges: number;
+  totalTeams: number;
+  totalSubmissions: number;
+  entries: {
+    rank: number;
+    isTied?: boolean;
+    teamName: string;
+    projectTitle?: string;
+    averageFormatted: string;
+    submittedCount?: number;
+    legacyCount?: number;
+    legacyAverageFormatted?: string;
+  }[];
+  /** Scale of `averageFormatted`. Missing on archives made before the five-criteria change (those are 1-5). */
+  scoreMax?: number;
+  legacyMax?: number;
+  legacyRatings?: number;
+}
+
+/** Archived results of earlier events, newest first. Admin only (rules enforce it). */
+export async function listEventArchives(): Promise<EventArchive[]> {
+  try {
+    const snap = await getDocs(collection(db, 'eventArchives'));
+    return snap.docs
+      .map((d) => {
+        const x = d.data();
+        return {
+          id: d.id,
+          eventName: String(x.eventName ?? ''),
+          archivedAtMs: x.archivedAt?.toMillis?.() ?? 0,
+          archivedBy: String(x.archivedBy ?? ''),
+          totalJudges: Number(x.totalJudges ?? 0),
+          totalTeams: Number(x.totalTeams ?? 0),
+          totalSubmissions: Number(x.totalSubmissions ?? 0),
+          entries: Array.isArray(x.entries) ? x.entries : [],
+          scoreMax: typeof x.scoreMax === 'number' ? x.scoreMax : undefined,
+          legacyMax: typeof x.legacyMax === 'number' ? x.legacyMax : undefined,
+          legacyRatings: typeof x.legacyRatings === 'number' ? x.legacyRatings : undefined,
+        } as EventArchive;
+      })
+      .sort((a, b) => b.archivedAtMs - a.archivedAtMs);
+  } catch (err) {
+    handleFirestoreError(err, OperationType.LIST, 'eventArchives');
   }
 }
 

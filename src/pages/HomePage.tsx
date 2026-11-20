@@ -33,8 +33,8 @@ export function HomePage() {
     (sum, t) => sum + (t.submittedCount || 0),
     0,
   );
-  const resultsReleased = Boolean(settings?.resultsPublished);
-  const canSeeLeaderboard = isAdmin || resultsReleased;
+  const resultsReleased = false; // results are never released to judges or the public
+  const canSeeLeaderboard = isAdmin;
 
   return (
     <div className="min-h-screen flex flex-col bg-[#071422] text-slate-100">
@@ -63,7 +63,7 @@ export function HomePage() {
                 <span className="text-white font-semibold">{eventName}</span> at{' '}
                 <span className="text-white font-semibold">{collegeName}</span>.
                 Judges enter quickly with their name and email to evaluate each
-                team with a single 1 to 5 star overall rating. Rankings remain
+                team on five criteria, each scored 0 to 5 (total out of 25). Rankings remain
                 confidential to administrators until final results are released.
               </p>
 
@@ -185,11 +185,11 @@ export function HomePage() {
                 02. Rate Overall Presentation
               </div>
               <h3 className="text-lg font-display font-bold text-white mb-2">
-                One 1 to 5 Star Overall Rating
+                Five Criteria, Total Out of 25
               </h3>
               <p className="text-sm text-slate-300 leading-relaxed">
-                Assign a single overall star rating from 1 (Poor) to 5
-                (Excellent) with optional written feedback. Duplicate
+                Score innovation, problem relevance, technical work,
+                presentation and feasibility from 0 to 5 each, with optional written feedback. Duplicate
                 submissions are automatically prevented.
               </p>
             </div>
@@ -199,7 +199,7 @@ export function HomePage() {
                 03. Top 2 Winner Release
               </div>
               <h3 className="text-lg font-display font-bold text-white mb-2">
-                Confidential Until Released
+                Admin-Only Leaderboard
               </h3>
               <p className="text-sm text-slate-300 leading-relaxed">
                 Live rankings and results are visible exclusively to Event

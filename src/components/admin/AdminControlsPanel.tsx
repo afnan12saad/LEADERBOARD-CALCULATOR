@@ -1,18 +1,17 @@
 import { useEffect, useState } from 'react';
 import {
   Clock,
-  Eye,
-  EyeOff,
   Pause,
   Play,
   RotateCcw,
   Trash2,
 } from 'lucide-react';
 import { ConfirmDialog } from '../ConfirmDialog';
+import { useArenaAuth } from '../../context/ArenaAuthContext';
 import { LiveTimerDisplay } from '../LiveTimerDisplay';
 import {
-  publishOrHideResults,
-  resetAllEventDataToZero,
+  archiveAndStartNewEvent,
+  getResetState,
   saveEventSettings,
 } from '../../services/arenaService';
 import type {
@@ -20,7 +19,6 @@ import type {
   EventSettings,
   Judge,
   Team,
-  TieBreakerMode,
 } from '../../types/arena';
 import {
   clampWholeEventTimerSeconds,
@@ -52,6 +50,7 @@ export function AdminControlsPanel({
   evaluations,
   onNotify,
 }: AdminControlsPanelProps) {
+  const { user } = useArenaAuth();
   const initialDur = splitSecondsToHms(settings.timerDurationSeconds);
   const initialWarn = splitSecondsToHms(settings.timerWarningSeconds);
 
@@ -65,6 +64,14 @@ export function AdminControlsPanel({
 
   const [busy, setBusy] = useState(false);
   const [resetConfirmOpen, setResetConfirmOpen] = useState(false);
+  const [resetPending, setResetPending] = useState(false);
+  const refreshResetState = () =>
+    getResetState()
+      .then((r) => setResetPending(r !== null))
+      .catch(() => {});
+  useEffect(() => {
+    refreshResetState();
+  }, []);
 
   useEffect(() => {
     const dur = splitSecondsToHms(settings.timerDurationSeconds);
@@ -226,59 +233,20 @@ export function AdminControlsPanel({
     }
   };
 
-  const handleTieModeChange = async (mode: TieBreakerMode) => {
-    setBusy(true);
-    try {
-      const updated = { ...settings, tieBreakerMode: mode };
-      await saveEventSettings(updated);
-      if (updated.resultsPublished) {
-        await publishOrHideResults({
-          publish: true,
-          teams,
-          judges,
-          evaluations,
-          settings: updated,
-        });
-      }
-      onNotify(
-        mode === 'tie'
-          ? 'Tie handling set to Allow Equal Ties.'
-          : 'Tie handling set to Admin Priority Order.',
-      );
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const handleTogglePublish = async () => {
-    setBusy(true);
-    try {
-      const nextPublish = !settings.resultsPublished;
-      await publishOrHideResults({
-        publish: nextPublish,
-        teams,
-        judges,
-        evaluations,
-        settings,
-      });
-      onNotify(
-        nextPublish
-          ? 'Final Top 2 spotlight & complete results released to all judges and participants.'
-          : 'Results hidden from judges and participants (Admin-only mode active).',
-      );
-    } finally {
-      setBusy(false);
-    }
-  };
-
   const handleResetAllZero = async () => {
     setBusy(true);
     try {
-      await resetAllEventDataToZero(settings);
+      await archiveAndStartNewEvent(settings, user?.email || 'admin');
       setResetConfirmOpen(false);
-      onNotify('Initialized everything to zero with only 15 default teams.');
+      onNotify(
+        'Results archived. New event ready: ratings and judges cleared, 15 default teams, admin accounts kept.',
+      );
+    } catch (err) {
+      setResetConfirmOpen(false);
+      onNotify(err instanceof Error ? err.message : 'The reset failed.');
     } finally {
       setBusy(false);
+      refreshResetState();
     }
   };
 
@@ -332,7 +300,7 @@ export function AdminControlsPanel({
                         preset.seconds,
                       )
                     }
-                    className={`px-3 py-1.5 rounded-lg text-xs font-semibold font-mono-tabular transition-colors ${
+                    className={`min-h-[44px] px-3 py-1.5 rounded-lg text-xs font-semibold font-mono-tabular transition-colors ${
                       isSelected
                         ? 'bg-[#2563EB] text-white'
                         : 'border border-[#24436B] bg-[#081422] text-slate-300 hover:bg-[#102640] hover:text-white'
@@ -586,14 +554,14 @@ export function AdminControlsPanel({
                 Accept Rating Submissions
               </div>
               <div className="text-xs text-slate-400">
-                Allow judges to submit 1 to 5 star overall ratings.
+                Allow judges to submit five-criteria scores.
               </div>
             </div>
             <button
               type="button"
               disabled={busy}
               onClick={() => void handleToggleSubmissions()}
-              className={`px-3.5 py-2 rounded-lg text-xs font-semibold transition-colors whitespace-nowrap ${
+              className={`min-h-[44px] px-3.5 py-2 rounded-lg text-xs font-semibold transition-colors whitespace-nowrap ${
                 settings.submissionsOpen
                   ? 'bg-[#16A34A] text-white hover:bg-[#15803d]'
                   : 'bg-[#172B44] text-slate-300 hover:bg-[#1e3756]'
@@ -616,7 +584,7 @@ export function AdminControlsPanel({
               type="button"
               disabled={busy}
               onClick={() => void handleToggleEditing()}
-              className={`px-3.5 py-2 rounded-lg text-xs font-semibold transition-colors whitespace-nowrap ${
+              className={`min-h-[44px] px-3.5 py-2 rounded-lg text-xs font-semibold transition-colors whitespace-nowrap ${
                 settings.editingAllowed
                   ? 'bg-[#2563EB] text-white hover:bg-[#1d4ed8]'
                   : 'bg-[#172B44] text-slate-300 hover:bg-[#1e3756]'
@@ -626,82 +594,47 @@ export function AdminControlsPanel({
             </button>
           </div>
 
-          <div className="pt-1">
-            <label
-              htmlFor="tie-breaker-mode"
-              className="block text-xs font-semibold text-slate-300 mb-1.5"
-            >
-              Equal Average Tie-Handling
-            </label>
-            <select
-              id="tie-breaker-mode"
-              value={settings.tieBreakerMode}
-              disabled={busy}
-              onChange={(e) =>
-                void handleTieModeChange(e.target.value as TieBreakerMode)
-              }
-              className={inputClass}
-            >
-              <option value="tie">Declare Equal Averages as Ties</option>
-              <option value="admin_order">
-                Break Ties by Team Tie-Breaker Priority
-              </option>
-            </select>
-          </div>
+          <p className="pt-1 text-xs text-slate-400 leading-relaxed">
+            Ranking uses the average rounded to 2 decimals. Teams with equal
+            rounded averages share the same rank (for example 1, 1, 3).
+          </p>
         </div>
 
         {/* Result Publication & Full Zero Reset */}
         <div className="bg-[#0D1E33] border border-[#1E3A5F] rounded-xl p-6 flex flex-col justify-between gap-6">
           <div className="space-y-3">
             <h3 className="text-base font-display font-bold text-white">
-              Leaderboard & Result Release
+              Leaderboard Visibility (Admin Only)
             </h3>
             <p className="text-xs text-slate-300 leading-relaxed">
-              {settings.resultsPublished
-                ? 'Results are Released. Judges, participants, and public screens can view the Top 2 spotlight winners and complete leaderboard.'
-                : 'Admin-Only Mode is active. The live leaderboard is visible exclusively to admins and stays hidden from judges and participants until release.'}
+              The live leaderboard is visible only to signed-in admins. Judges
+              and other users cannot open it. Open the Projector page to show
+              it on the event screen.
             </p>
-            <button
-              type="button"
-              disabled={busy}
-              onClick={() => void handleTogglePublish()}
-              className={`w-full min-h-[46px] inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg text-sm font-semibold transition-colors ${
-                settings.resultsPublished
-                  ? 'bg-[#142D4C] border border-[#2B4E7A] text-white hover:bg-[#1b3a61]'
-                  : 'bg-[#16A34A] text-white hover:bg-[#15803d]'
-              }`}
-            >
-              {settings.resultsPublished ? (
-                <>
-                  <EyeOff className="w-4 h-4" />
-                  Hide Results (Admin Only)
-                </>
-              ) : (
-                <>
-                  <Eye className="w-4 h-4" />
-                  Release Final Results to All Users
-                </>
-              )}
-            </button>
           </div>
 
           <div className="pt-4 border-t border-[#183152] flex flex-col sm:flex-row sm:items-center justify-between gap-4">
             <div>
               <div className="text-sm font-bold text-red-400">
-                Initialize Everything to Zero (15 Teams)
+                Start New Event (archives results first)
               </div>
+              {resetPending && (
+                <div className="text-xs text-amber-300 mt-1 font-semibold">
+                  A reset was started and not finished. Submissions stay closed. Run it again to resume. The original archive is reused.
+                </div>
+              )}
               <div className="text-xs text-slate-400 mt-0.5">
-                Resets all ratings, judges, and timer to zero, and populates 15 default teams.
+                Saves this event's final standings to the archive, then clears ratings, judges and the timer and sets up 15 default teams. Admin accounts are kept.
               </div>
             </div>
             <button
               type="button"
               disabled={busy}
               onClick={() => setResetConfirmOpen(true)}
-              className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg border border-red-500/40 bg-red-950/40 text-red-300 text-xs font-semibold hover:bg-red-950/70 shrink-0"
+              className="inline-flex items-center gap-1.5 min-h-[44px] px-3.5 py-2 rounded-lg border border-red-500/40 bg-red-950/40 text-red-300 text-xs font-semibold hover:bg-red-950/70 shrink-0"
             >
               <Trash2 className="w-4 h-4" />
-              Initialize 15 Teams to Zero
+              {resetPending ? 'Resume Start New Event' : 'Start New Event'}
             </button>
           </div>
         </div>
@@ -709,11 +642,11 @@ export function AdminControlsPanel({
 
       <ConfirmDialog
         open={resetConfirmOpen}
-        title="Initialize Everything to Zero (15 Teams)"
-        message="This will reset all ratings and presentation progress to zero, clear registered judges, reset the event timer to 00:00:00, and initialize the system with exactly 15 default teams (Team 01 to Team 15). Administrator accounts will be preserved."
-        confirmLabel="Initialize 15 Teams to Zero"
+        title="Start New Event"
+        message="First the final standings of this event are saved to the archive. Then all ratings and presentation progress are cleared, registered judges are removed, the timer is reset to 00:00:00, and 15 default teams (Team 01 to Team 15) are created. Administrator accounts are kept. If saving the archive fails, nothing is reset."
+        confirmLabel={resetPending ? 'Resume Reset' : 'Archive and Start New Event'}
         danger
-        requireTypedPhrase="INITIALIZE 15"
+        requireTypedPhrase="START NEW EVENT"
         busy={busy}
         onCancel={() => setResetConfirmOpen(false)}
         onConfirm={handleResetAllZero}

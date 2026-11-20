@@ -1,10 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import {
+  Archive,
   Award,
   CheckCircle2,
-  Eye,
-  EyeOff,
   LayoutDashboard,
   LogOut,
   MonitorPlay,
@@ -19,10 +18,12 @@ import { SiteHeader } from '../components/SiteHeader';
 import { SiteFooter } from '../components/SiteFooter';
 import { LiveTimerDisplay } from '../components/LiveTimerDisplay';
 import { PodiumShowcase } from '../components/PodiumShowcase';
+import { LegacyRatingsNotice } from '../components/admin/LegacyRatingsNotice';
 import { AdminTeamsPanel } from '../components/admin/AdminTeamsPanel';
 import { AdminJudgesPanel } from '../components/admin/AdminJudgesPanel';
 import { AdminControlsPanel } from '../components/admin/AdminControlsPanel';
 import { AdminQrPanel } from '../components/admin/AdminQrPanel';
+import { AdminArchivesPanel } from '../components/admin/AdminArchivesPanel';
 import { AdminResultsPanel } from '../components/admin/AdminResultsPanel';
 import { AdminSettingsPanel } from '../components/admin/AdminSettingsPanel';
 import { useArenaAuth } from '../context/ArenaAuthContext';
@@ -30,10 +31,11 @@ import {
   DEFAULT_EVENT_SETTINGS,
   initializeDefaultEventData,
   initializeEverythingToZeroWith15Teams,
-  publishOrHideResults,
   subscribeAllAdmins,
   subscribeAllEvaluations,
   subscribeAllJudges,
+  getAdminSlotUsage,
+  type AdminSlotUsage,
 } from '../services/arenaService';
 import type {
   AdminUser,
@@ -53,6 +55,7 @@ type AdminTab =
   | 'controls'
   | 'qr'
   | 'results'
+  | 'archives'
   | 'settings';
 
 export function AdminDashboardPage() {
@@ -76,8 +79,15 @@ export function AdminDashboardPage() {
   const [judges, setJudges] = useState<Judge[]>([]);
   const [evaluations, setEvaluations] = useState<Evaluation[]>([]);
   const [toast, setToast] = useState('');
-  const [releaseBusy, setReleaseBusy] = useState(false);
   const zeroInitAttempted = useRef(false);
+  const [slotUsage, setSlotUsage] = useState<AdminSlotUsage | null>(null);
+  useEffect(() => {
+    if (!isAdmin) return;
+    void getAdminSlotUsage().then(setSlotUsage).catch(() => setSlotUsage(null));
+  }, [isAdmin, admins.length]);
+  const adminLimitReached =
+    admins.length >= 5 ||
+    (slotUsage !== null && (!slotUsage.reconciled || slotUsage.free.length === 0));
 
   const pendingRequests = useMemo(
     () => adminRequests.filter((r) => r.status === 'pending'),
@@ -107,7 +117,9 @@ export function AdminDashboardPage() {
     if (isAdmin && dataReady && !zeroInitAttempted.current) {
       if (!settings || teams.length === 0) {
         zeroInitAttempted.current = true;
-        void initializeEverythingToZeroWith15Teams(settings);
+        void initializeEverythingToZeroWith15Teams(settings, {
+          onlyIfNoRatings: true,
+        });
       }
     }
   }, [isAdmin, dataReady, settings, teams.length]);
@@ -132,47 +144,11 @@ export function AdminDashboardPage() {
     [teams, evaluations, metrics.totalJudges, effectiveSettings.tieBreakerMode],
   );
 
-  // Keep published leaderboard document synced if new ratings arrive while results are published
-  useEffect(() => {
-    if (!isAdmin || !settings?.resultsPublished) return;
-    const timer = window.setTimeout(() => {
-      void publishOrHideResults({
-        publish: true,
-        teams,
-        judges,
-        evaluations,
-        settings,
-      });
-    }, 600);
-    return () => window.clearTimeout(timer);
-  }, [isAdmin, settings, teams, judges, evaluations]);
-
   const showToast = (msg: string) => {
     setToast(msg);
     window.setTimeout(() => {
       setToast((prev) => (prev === msg ? '' : prev));
     }, 3500);
-  };
-
-  const handleToggleReleaseOverview = async () => {
-    setReleaseBusy(true);
-    try {
-      const nextPublish = !effectiveSettings.resultsPublished;
-      await publishOrHideResults({
-        publish: nextPublish,
-        teams,
-        judges,
-        evaluations,
-        settings: effectiveSettings,
-      });
-      showToast(
-        nextPublish
-          ? 'Final results released to all judges and participants.'
-          : 'Results hidden from judges and participants (Admin-only view).',
-      );
-    } finally {
-      setReleaseBusy(false);
-    }
   };
 
   if (!authReady || !isAdmin) {
@@ -195,6 +171,7 @@ export function AdminDashboardPage() {
       { key: 'controls', label: 'Event Timer & Controls', icon: Sliders },
       { key: 'qr', label: 'QR Code', icon: QrCode },
       { key: 'results', label: 'Results & Exports', icon: Award },
+      { key: 'archives', label: 'Archived Events', icon: Archive },
       { key: 'settings', label: 'Event Settings', icon: Settings },
     ];
 
@@ -255,9 +232,14 @@ export function AdminDashboardPage() {
                 Incoming Administrator Join Request ({pendingRequests.length})
               </div>
               <span className="text-xs text-amber-300 font-semibold">
-                First Admin Verification & Approval Required
+                Approval Required
               </span>
             </div>
+            {adminLimitReached && (
+              <p className="text-xs text-amber-200">
+                {admins.length} of 5 admin accounts. Adding another admin is not possible right now. Remove an admin, or see Event Settings for details.
+              </p>
+            )}
             <div className="divide-y divide-amber-900/40 space-y-2">
               {pendingRequests.map((req) => (
                 <div
@@ -271,12 +253,6 @@ export function AdminDashboardPage() {
                         ({req.email})
                       </span>
                     </div>
-                    <div className="text-xs text-amber-300/90 mt-0.5 flex items-center gap-2">
-                      <span>Verification Code:</span>
-                      <span className="font-mono-tabular font-bold text-white bg-black/40 px-2 py-0.5 rounded border border-amber-500/30 text-xs tracking-wider">
-                        {req.verificationCode}
-                      </span>
-                    </div>
                   </div>
                   <div className="flex items-center gap-2">
                     <button
@@ -285,11 +261,16 @@ export function AdminDashboardPage() {
                         try {
                           await approveRequest(req);
                           showToast(`Approved ${req.name} as Administrator.`);
-                        } catch {
-                          showToast('Unable to approve admin request.');
+                        } catch (err) {
+                          showToast(
+                            err instanceof Error && /maximum of 5/i.test(err.message)
+                              ? err.message
+                              : 'Unable to approve admin request.',
+                          );
                         }
                       }}
-                      className="px-3.5 py-1.5 rounded-lg bg-[#16A34A] hover:bg-[#15803D] text-white text-xs font-semibold transition-colors flex items-center gap-1.5"
+                      disabled={adminLimitReached}
+                      className="min-h-[44px] px-4 py-2 rounded-lg bg-[#16A34A] hover:bg-[#15803D] text-white text-xs font-semibold transition-colors flex items-center gap-1.5 disabled:opacity-50 disabled:cursor-not-allowed"
                     >
                       <CheckCircle2 className="w-3.5 h-3.5" />
                       Accept & Add Admin
@@ -304,7 +285,7 @@ export function AdminDashboardPage() {
                           showToast('Unable to decline request.');
                         }
                       }}
-                      className="px-3 py-1.5 rounded-lg border border-amber-700/50 bg-black/20 text-xs font-semibold text-amber-200 hover:bg-black/40 transition-colors"
+                      className="min-h-[44px] px-4 py-2 rounded-lg border border-amber-700/50 bg-black/20 text-xs font-semibold text-amber-200 hover:bg-black/40 transition-colors"
                     >
                       Decline
                     </button>
@@ -417,40 +398,10 @@ export function AdminDashboardPage() {
                         <div className="text-xs font-semibold text-slate-400">
                           Whole Event Timer & Visibility
                         </div>
-                        <div
-                          className={`text-sm font-bold mt-0.5 ${
-                            effectiveSettings.resultsPublished
-                              ? 'text-[#4ADE80]'
-                              : 'text-[#F5B942]'
-                          }`}
-                        >
-                          {effectiveSettings.resultsPublished
-                            ? 'Final Results Released'
-                            : 'Leaderboard Admin-Only'}
+                        <div className="text-sm font-bold mt-0.5 text-[#F5B942]">
+                          Leaderboard Admin-Only
                         </div>
                       </div>
-                      <button
-                        type="button"
-                        disabled={releaseBusy}
-                        onClick={() => void handleToggleReleaseOverview()}
-                        className={`inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-xs font-semibold transition-colors ${
-                          effectiveSettings.resultsPublished
-                            ? 'border border-[#24436B] bg-[#091829] text-slate-200 hover:bg-[#102640]'
-                            : 'bg-[#16A34A] text-white hover:bg-[#15803d]'
-                        }`}
-                      >
-                        {effectiveSettings.resultsPublished ? (
-                          <>
-                            <EyeOff className="w-3.5 h-3.5" />
-                            Hide Results
-                          </>
-                        ) : (
-                          <>
-                            <Eye className="w-3.5 h-3.5" />
-                            Release Results
-                          </>
-                        )}
-                      </button>
                     </div>
 
                     <div className="flex items-center justify-between gap-3 pt-2 border-t border-[#183152]">
@@ -458,7 +409,7 @@ export function AdminDashboardPage() {
                       <button
                         type="button"
                         onClick={() => setActiveTab('controls')}
-                        className="text-xs font-semibold text-[#F5B942] hover:underline whitespace-nowrap"
+                        className="inline-flex items-center min-h-[44px] text-xs font-semibold text-[#F5B942] hover:underline whitespace-nowrap"
                       >
                         Manage Event Timer
                       </button>
@@ -481,12 +432,13 @@ export function AdminDashboardPage() {
                     <button
                       type="button"
                       onClick={() => setActiveTab('results')}
-                      className="text-xs font-semibold text-[#F5B942] hover:underline self-start sm:self-center"
+                      className="inline-flex items-center min-h-[44px] text-xs font-semibold text-[#F5B942] hover:underline self-start sm:self-center"
                     >
                       Open Audit Log & Exports
                     </button>
                   </div>
 
+                  <LegacyRatingsNotice entries={leaderboard} />
                   {leaderboard.length === 0 ? (
                     <div className="py-8 text-center space-y-2">
                       <p className="text-sm text-slate-300 font-medium">
@@ -527,7 +479,7 @@ export function AdminDashboardPage() {
                               Ratings Received
                             </th>
                             <th className="py-3 px-5 text-right">
-                              Average (/5)
+                              Average (/25)
                             </th>
                           </tr>
                         </thead>
@@ -557,7 +509,7 @@ export function AdminDashboardPage() {
                               </td>
                               <td className="py-3 px-5 text-right font-mono-tabular font-bold text-[#F5B942]">
                                 {entry.submittedCount > 0
-                                  ? `${entry.averageFormatted} / 5`
+                                  ? `${entry.averageFormatted} / 25`
                                   : 'Pending'}
                               </td>
                             </tr>
@@ -613,6 +565,8 @@ export function AdminDashboardPage() {
                 onNotify={showToast}
               />
             )}
+
+            {activeTab === 'archives' && <AdminArchivesPanel />}
 
             {activeTab === 'settings' && (
               <AdminSettingsPanel

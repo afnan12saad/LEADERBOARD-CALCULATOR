@@ -27,7 +27,7 @@ export function PrivacyPolicyPage() {
             PROJECT ARENA collects only the information necessary to administer
             academic project evaluations: authorized judge identifiers, names,
             academic departments, authentication email addresses used for
-            account verification, overall 1 to 5 star team ratings, and optional
+            account verification, five-criteria team scores (0 to 5 each), and optional
             written evaluation remarks.
           </p>
         </section>

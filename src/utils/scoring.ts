@@ -1,4 +1,6 @@
 import type {
+  CriteriaScores,
+  CriterionId,
   Evaluation,
   EventSettings,
   Judge,
@@ -16,6 +18,47 @@ export const STAR_LABELS: Record<1 | 2 | 3 | 4 | 5, string> = {
   5: 'Excellent',
 };
 
+export const CRITERIA: { id: CriterionId; label: string }[] = [
+  { id: 'c1', label: 'Innovation & Originality' },
+  { id: 'c2', label: 'Problem Relevance & Impact' },
+  { id: 'c3', label: 'Technical Implementation' },
+  { id: 'c4', label: 'Presentation & Communication' },
+  { id: 'c5', label: 'Feasibility & Scalability' },
+];
+// Per-criterion range 0-5 (user-confirmed: zero is allowed). Keep in sync
+// with the criteria range in firestore.rules.
+export const MIN_CRITERION_SCORE = 0;
+export const MAX_CRITERION_SCORE = 5;
+export const MAX_TOTAL_SCORE = CRITERIA.length * MAX_CRITERION_SCORE;
+
+export function isValidCriterionScore(v: unknown): v is number {
+  return (
+    typeof v === 'number' &&
+    Number.isInteger(v) &&
+    v >= MIN_CRITERION_SCORE &&
+    v <= MAX_CRITERION_SCORE
+  );
+}
+
+export function isValidCriteriaScores(c: unknown): c is CriteriaScores {
+  if (!c || typeof c !== 'object') return false;
+  const rec = c as Record<string, unknown>;
+  return CRITERIA.every(({ id }) => isValidCriterionScore(rec[id]));
+}
+
+export function sumCriteria(c: CriteriaScores): number {
+  return CRITERIA.reduce((acc, { id }) => acc + c[id], 0);
+}
+
+/** True for evaluations on the five-criteria scale with a consistent total. */
+export function isScoredEvaluation(ev: Evaluation): boolean {
+  return (
+    ev.scoreVersion === 2 &&
+    isValidCriteriaScores(ev.criteria) &&
+    ev.total === sumCriteria(ev.criteria)
+  );
+}
+
 export function isValidStarRating(value: unknown): value is 1 | 2 | 3 | 4 | 5 {
   return (
     typeof value === 'number' &&
@@ -29,32 +72,45 @@ export function calculateLeaderboard(
   teams: Team[],
   evaluations: Evaluation[],
   totalJudges: number,
-  tieBreakerMode: TieBreakerMode = 'tie',
+  // Kept only so older callers still compile. Ties ALWAYS share a rank (1,1,3):
+  // the legacy 'admin_order' mode is ignored, even if it is stored in settings.
+  _legacyTieBreakerMode?: TieBreakerMode,
 ): LeaderboardEntry[] {
-  const grouped = new Map<string, { sum: number; count: number }>();
+  const grouped = new Map<
+    string,
+    { sum: number; count: number; legacy: number }
+  >();
 
   for (const team of teams) {
-    grouped.set(team.id, { sum: 0, count: 0 });
+    grouped.set(team.id, { sum: 0, count: 0, legacy: 0 });
   }
 
   for (const ev of evaluations) {
-    if (!isValidStarRating(ev.rating)) continue;
     const bucket = grouped.get(ev.teamId);
-    if (bucket) {
-      bucket.sum += ev.rating;
+    if (!bucket) continue;
+    if (isScoredEvaluation(ev)) {
+      bucket.sum += ev.total as number;
       bucket.count += 1;
+    } else if (isValidStarRating(ev.rating)) {
+      // Old single 1-5 rating: a different scale, never mixed into the total.
+      bucket.legacy += 1;
     }
   }
 
   const raw = teams.map((team) => {
-    const stats = grouped.get(team.id) ?? { sum: 0, count: 0 };
-    const averageRating = stats.count > 0 ? stats.sum / stats.count : 0;
+    const stats = grouped.get(team.id) ?? { sum: 0, count: 0, legacy: 0 };
+    // Rank and display use the SAME value: the average rounded to 2 decimals.
+    const averageRating =
+      stats.count > 0
+        ? Math.round((stats.sum / stats.count) * 100 + 1e-9) / 100
+        : 0;
     return {
       team,
       ratingSum: stats.sum,
       submittedCount: stats.count,
+      legacyCount: stats.legacy,
       averageRating,
-      averageFormatted: stats.count > 0 ? averageRating.toFixed(1) : '0.0',
+      averageFormatted: stats.count > 0 ? averageRating.toFixed(2) : '0.00',
     };
   });
 
@@ -68,11 +124,6 @@ export function calculateLeaderboard(
       return diff;
     }
 
-    if (tieBreakerMode === 'admin_order') {
-      const tbDiff = a.team.tieBreakerRank - b.team.tieBreakerRank;
-      if (tbDiff !== 0) return tbDiff;
-    }
-
     const orderDiff = a.team.orderIndex - b.team.orderIndex;
     if (orderDiff !== 0) return orderDiff;
     return a.team.name.localeCompare(b.team.name);
@@ -84,7 +135,7 @@ export function calculateLeaderboard(
     let rank = i + 1;
     let isTied = false;
 
-    if (tieBreakerMode === 'tie' && i > 0) {
+    if (i > 0) {
       const prev = raw[i - 1];
       const sameScore =
         item.submittedCount > 0 &&
@@ -108,6 +159,7 @@ export function calculateLeaderboard(
       averageFormatted: item.averageFormatted,
       ratingSum: item.ratingSum,
       submittedCount: item.submittedCount,
+      legacyCount: item.legacyCount,
       totalJudges,
     });
   }
@@ -140,7 +192,7 @@ export function calculateDashboardMetrics(
     if (
       teamIds.has(ev.teamId) &&
       judgeIds.has(ev.judgeId) &&
-      isValidStarRating(ev.rating)
+      isScoredEvaluation(ev)
     ) {
       totalSubmitted += 1;
     }
@@ -377,7 +429,9 @@ export const INITIAL_15_TEAMS: Array<{
   },
 ];
 
-export const MAX_ADMIN_USERS = 999999; // Limit removed per user requirements
+// Maximum admin accounts in total (owner included). Enforced by firestore.rules via adminSlots/s1..s5.
+export const MAX_ADMIN_USERS = 5;
+export const ADMIN_SLOT_IDS = ['s1', 's2', 's3', 's4', 's5'] as const;
 
 export function generateVerificationCode(): string {
   // 6-digit random verification code
@@ -388,14 +442,15 @@ export function buildAdminApprovalEmailUrl(params: {
   firstAdminEmail: string;
   candidateName: string;
   candidateEmail: string;
-  code: string;
+  /** Unused: codes no longer approve anything. Kept so old callers still compile. */
+  code?: string;
   appUrl: string;
 }): string {
   const subject = encodeURIComponent(
-    `[PROJECT ARENA] Administrator Verification Code: ${params.code}`,
+    '[PROJECT ARENA] Administrator access request waiting for approval',
   );
   const body = encodeURIComponent(
-    `Hello First Administrator,
+    `Hello,
 
 A new organizer has requested administrator access to the Project Arena Evaluation Console.
 
@@ -403,15 +458,11 @@ Requester Details:
 - Name: ${params.candidateName}
 - Email: ${params.candidateEmail}
 
-Your 6-Digit Admin Verification Code:
->>>  ${params.code}  <<<
+To approve: open the Admin Console at ${params.appUrl || window.location.origin}/admin and click "Accept & Add Admin" in the join request. Only an existing admin can approve, and the console allows at most 5 admin accounts.
 
-To approve this administrator request:
-1. Provide the 6-digit verification code (${params.code}) to the requester so they can complete verification at /admin/login.
-2. Or open your Admin Console at ${params.appUrl || window.location.origin}/admin and click "Accept & Add Admin" under the Admin Requests panel.
+If you do not recognise this person, decline the request.
 
-Best regards,
-PROJECT ARENA Security System`,
+PROJECT ARENA`,
   );
   return `mailto:${params.firstAdminEmail}?subject=${subject}&body=${body}`;
 }

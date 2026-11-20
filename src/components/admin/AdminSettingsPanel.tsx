@@ -12,8 +12,11 @@ import {
   XCircle,
 } from 'lucide-react';
 import {
+  getAdminSlotUsage,
+  reconcileAdminSlots,
   removeAdminAccount,
   saveEventSettings,
+  type AdminSlotUsage,
 } from '../../services/arenaService';
 import type {
   AdminQuota,
@@ -21,7 +24,7 @@ import type {
   AdminUser,
   EventSettings,
 } from '../../types/arena';
-import { buildAdminApprovalEmailUrl } from '../../utils/scoring';
+import { MAX_ADMIN_USERS } from '../../utils/scoring';
 import { ConfirmDialog } from '../ConfirmDialog';
 
 interface AdminSettingsPanelProps {
@@ -57,6 +60,27 @@ export function AdminSettingsPanel({
   const [removeTarget, setRemoveTarget] = useState<AdminUser | null>(null);
   const [removeBusy, setRemoveBusy] = useState(false);
   const [actionBusyId, setActionBusyId] = useState<string | null>(null);
+  const [slotUsage, setSlotUsage] = useState<AdminSlotUsage | null>(null);
+  const [slotBusy, setSlotBusy] = useState(false);
+  const refreshSlots = () => {
+    void getAdminSlotUsage().then(setSlotUsage).catch(() => setSlotUsage(null));
+  };
+  useEffect(refreshSlots, [admins.length]);
+  const adminLimitReached =
+    admins.length >= MAX_ADMIN_USERS ||
+    (slotUsage !== null && (!slotUsage.reconciled || slotUsage.free.length === 0));
+  const handleReconcile = async () => {
+    setSlotBusy(true);
+    try {
+      const r = await reconcileAdminSlots();
+      onNotify(`${r.slotted} existing admin account${r.slotted === 1 ? '' : 's'} assigned to slots. Adding new admins stays paused until the setup is confirmed.`);
+      refreshSlots();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Unable to reconcile admin slots.');
+    } finally {
+      setSlotBusy(false);
+    }
+  };
 
   // Sync local form fields whenever Firestore event settings update
   useEffect(() => {
@@ -320,11 +344,10 @@ export function AdminSettingsPanel({
           <div>
             <h2 className="text-lg font-display font-bold text-white flex items-center gap-2">
               <Mail className="w-4 h-4 text-[#F5B942]" />
-              Admin Access Requests & Verification Codes
+              Admin Access Requests
             </h2>
             <p className="text-xs text-slate-400 mt-0.5">
-              New administrators request access with a 6-digit verification code.
-              Accepting adds them to the admin committee.
+              New administrators request access here. Accepting adds them to the admin committee, up to the limit of 5 admin accounts.
             </p>
           </div>
           <span className="px-2.5 py-1 rounded-md bg-[#081422] text-xs font-semibold font-mono-tabular text-[#F5B942]">
@@ -342,13 +365,6 @@ export function AdminSettingsPanel({
           <div className="divide-y divide-[#152B46]">
             {pendingRequests.map((req) => {
               const isActionBusy = actionBusyId === req.uid;
-              const mailto = buildAdminApprovalEmailUrl({
-                firstAdminEmail: req.firstAdminEmail,
-                candidateName: req.name,
-                candidateEmail: req.email,
-                code: req.verificationCode,
-                appUrl: window.location.origin,
-              });
 
               return (
                 <div
@@ -368,28 +384,13 @@ export function AdminSettingsPanel({
                     <div className="text-xs text-slate-300 font-mono-tabular">
                       {req.email}
                     </div>
-                    <div className="text-xs text-slate-400 flex items-center gap-2 pt-1">
-                      <span>Verification Code:</span>
-                      <span className="font-mono-tabular font-bold text-[#F5B942] bg-[#071322] px-2 py-0.5 rounded border border-[#1E3A5F] text-xs tracking-wider">
-                        {req.verificationCode}
-                      </span>
-                    </div>
                   </div>
 
                   <div className="flex flex-wrap items-center gap-2">
-                    <a
-                      href={mailto}
-                      target="_blank"
-                      rel="noreferrer"
-                      title="Open email notification"
-                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-[#24436B] bg-[#081422] text-xs font-semibold text-slate-300 hover:text-white hover:bg-[#102640] transition-colors"
-                    >
-                      <Send className="w-3 h-3 text-[#F5B942]" />
-                      Mail Code
-                    </a>
                     <button
                       type="button"
-                      disabled={isActionBusy}
+                      disabled={isActionBusy || adminLimitReached}
+                      title={adminLimitReached ? 'Admin limit reached' : undefined}
                       onClick={() => void handleApprove(req)}
                       className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg bg-[#16A34A] hover:bg-[#15803D] text-white text-xs font-semibold transition-colors disabled:opacity-50"
                     >
@@ -428,13 +429,33 @@ export function AdminSettingsPanel({
               Authorized Admin Accounts
             </h2>
             <p className="text-xs text-slate-400 mt-0.5">
-              Multi-admin committee governance. First admin approval required for all new additions. Limit removed.
+              Maximum of 5 admin accounts in total, owner included. Every new admin needs approval.
             </p>
           </div>
           <span className="px-2.5 py-1 rounded-md bg-[#081422] text-xs font-semibold font-mono-tabular text-[#F5B942]">
-            {admins.length} Active Administrator{admins.length === 1 ? '' : 's'}
+            {admins.length} of {MAX_ADMIN_USERS} admin accounts
           </span>
         </div>
+        {slotUsage && !slotUsage.reconciled && (
+          <div className="px-4 py-3 border-b border-[#152B46] bg-amber-950/30 text-xs text-amber-200 flex flex-wrap items-center justify-between gap-3">
+            <span>
+              Adding new admins is paused until the existing admin list has been checked and the five-admin limit is confirmed. Nobody loses access.
+            </span>
+            <button
+              type="button"
+              disabled={slotBusy}
+              onClick={() => void handleReconcile()}
+              className="min-h-11 px-3 rounded-lg border border-amber-500/50 text-amber-100 font-semibold disabled:opacity-50"
+            >
+              {slotBusy ? 'Working...' : 'Assign existing admins to slots'}
+            </button>
+          </div>
+        )}
+        {adminLimitReached && slotUsage?.reconciled && (
+          <div className="px-4 py-2 border-b border-[#152B46] text-xs text-slate-300">
+            All five admin slots are in use. Remove an admin to add another.
+          </div>
+        )}
 
         <div className="divide-y divide-[#152B46]">
           {admins.length === 0 ? (
@@ -500,8 +521,7 @@ export function AdminSettingsPanel({
           <span>
             New co-organizers can register at{' '}
             <span className="font-mono-tabular text-white">/admin/login</span>.
-            Upon signing up, a 6-digit code will be sent to the primary
-            administrator for acceptance.
+            Each request needs an existing admin to accept it (maximum of 5 admin accounts in total).
           </span>
         </div>
       </div>

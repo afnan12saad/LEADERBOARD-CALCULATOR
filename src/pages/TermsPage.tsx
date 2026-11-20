@@ -35,7 +35,7 @@ export function TermsPage() {
             2. Single Overall Rating Integrity
           </h2>
           <p>
-            Each judge may submit one overall rating (1 to 5 stars) per
+            Each judge may submit one set of five criteria scores (0 to 5 each, total out of 25) per
             participating team. Submitted scores are final unless the event
             administrator explicitly enables rating edits prior to result
             publication. Team averages are computed solely from valid submitted

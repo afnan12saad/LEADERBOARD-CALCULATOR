@@ -52,7 +52,6 @@ import {
   subscribeMyPendingAdminRequest,
   subscribePublicSummary,
   subscribeTeams,
-  verifyAdminCodeAndActivate,
 } from '../services/arenaService';
 import {
   MAX_ADMIN_USERS,
@@ -130,7 +129,6 @@ interface ArenaAuthContextValue {
   refreshAdminVerification: () => Promise<boolean>;
   sendAdminPasswordReset: (email: string) => Promise<void>;
   requestAdminJoin: (name: string) => Promise<AdminRequest>;
-  verifyAdminCode: (code: string) => Promise<boolean>;
   approveRequest: (request: AdminRequest) => Promise<void>;
   rejectRequest: (requestUid: string) => Promise<void>;
   signInJudgeByNameAndEmail: (name: string, email: string) => Promise<Judge>;
@@ -546,21 +544,6 @@ export function ArenaAuthProvider({ children }: { children: ReactNode }) {
     return req;
   }, []);
 
-  const verifyAdminCode = useCallback(
-    async (code: string) => {
-      const current = auth.currentUser;
-      if (!current) {
-        throw new Error('You must be signed in to verify code.');
-      }
-      const success = await verifyAdminCodeAndActivate(current, code);
-      if (success) {
-        await resolveRoles(current);
-      }
-      return success;
-    },
-    [resolveRoles],
-  );
-
   const approveRequest = useCallback(
     async (request: AdminRequest) => {
       const current = auth.currentUser;
@@ -689,7 +672,6 @@ export function ArenaAuthProvider({ children }: { children: ReactNode }) {
         refreshAdminVerification,
         sendAdminPasswordReset,
         requestAdminJoin,
-        verifyAdminCode,
         approveRequest,
         rejectRequest,
         signInJudgeByNameAndEmail,
