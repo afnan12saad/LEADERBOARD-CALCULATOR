@@ -61,7 +61,7 @@ export function ConfirmDialog({
             type="button"
             onClick={onCancel}
             aria-label="Close confirmation dialog"
-            className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-[#162E4D]"
+            className="min-w-[44px] min-h-[44px] inline-flex items-center justify-center rounded-lg text-slate-400 hover:text-white hover:bg-[#162E4D]"
           >
             <X className="w-4 h-4" />
           </button>
