@@ -1113,6 +1113,7 @@ export async function initializeEverythingToZeroWith15Teams(
     onlyIfNoRatings?: boolean;
     expectedRatingCount?: number;
     clearResetLock?: boolean;
+    beforeChunk?: () => Promise<void>;
   },
 ): Promise<void> {
   try {
@@ -1150,6 +1151,7 @@ export async function initializeEverythingToZeroWith15Teams(
       ...teamsSnap.docs,
     ].map((d) => d.ref);
     for (let i = 0; i < toDelete.length; i += 400) {
+      if (options?.beforeChunk) await options.beforeChunk();
       const chunk = writeBatch(db);
       for (const ref of toDelete.slice(i, i + 400)) chunk.delete(ref);
       await chunk.commit();
@@ -1316,6 +1318,10 @@ export async function archiveAndStartNewEvent(
   const settingsRef = doc(db, 'settings', 'event');
   const wasOpen = settings.submissionsOpen;
 
+  // Identifies this run. If another admin takes over a marker that looked abandoned,
+  // this run notices before its next delete and stops.
+  const token = `${Date.now().toString(36)}${Math.random().toString(36).slice(2)}`;
+
   // 1. Take the marker (or resume a reset that already started deleting).
   let resume: ResetState | null = null;
   try {
@@ -1348,6 +1354,7 @@ export async function archiveAndStartNewEvent(
           ? (resume as ResetState).expectedRatingCount
           : 0,
         startedBy: archivedBy.slice(0, 160),
+        owner: token,
         updatedAtMs: Date.now(),
       });
     });
@@ -1408,9 +1415,23 @@ export async function archiveAndStartNewEvent(
   try {
     await initializeEverythingToZeroWith15Teams(
       { ...settings, submissionsOpen: true },
-      { clearResetLock: true },
+      {
+        clearResetLock: true,
+        beforeChunk: async () => {
+          await runTransaction(db, async (tx) => {
+            const cur = await tx.get(lockRef);
+            if (!cur.exists() || cur.data().owner !== token) {
+              throw new Error(
+                'This reset was taken over by another admin session, so this one stopped.',
+              );
+            }
+            tx.update(lockRef, { updatedAtMs: Date.now() });
+          });
+        },
+      },
     );
   } catch (err) {
+    if (err instanceof Error && /taken over/.test(err.message)) throw err;
     throw new Error(
       'The reset did not finish. Your results are archived and submissions stay closed. Run Start New Event again to resume.',
       { cause: err },
