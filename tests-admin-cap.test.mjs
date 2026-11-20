@@ -61,7 +61,15 @@ await bad(addBatch(ctx('a1','a1@x.com'),'z9','s4'),'unreconciled: admin cannot a
 // 10 reconciliation: legacy admin claims slot, then marker, then additions work
 { const db=ctx('a1','a1@x.com'); const b=writeBatch(db); b.update(doc(db,'admins','L1'),{slot:'s4'}); b.set(doc(db,'adminSlots','s4'),{uid:'L1',createdAt:serverTimestamp()}); await good(b.commit(),'admin can reconcile a legacy admin into a slot'); }
 { const db=ctx('a1','a1@x.com'); const b=writeBatch(db); b.update(doc(db,'admins','L2'),{slot:'s5'}); b.set(doc(db,'adminSlots','s5'),{uid:'L2',createdAt:serverTimestamp()}); await good(b.commit(),'second legacy admin slotted'); }
-await good(setDoc(doc(ctx('a1','a1@x.com'),'adminSlots','reconciled'),{at:serverTimestamp()}),'reconciled marker set');
+await bad(setDoc(doc(ctx('a1','a1@x.com'),'adminSlots','reconciled'),{at:serverTimestamp()}),'an admin cannot assert the reconciled marker (needs trusted migration)');
+await bad(addBatch(ctx('n1','n1@x.com'),'n1','s1'),'still blocked: marker absent');
+// legacy install: forged count=0 + stranger self-registration must fail while unreconciled
+await env.withSecurityRulesDisabled(async c=>{await setDoc(doc(c.firestore(),'publicStats','adminQuota'),{count:0,updatedAt:T});});
+await bad(addBatch(ctx('n2','n2@x.com'),'n2','s1'),'unreconciled + forged count=0: stranger cannot bootstrap');
+await bad(addBatch(ctx('own','afnan12saad@gmail.com'),'own','s1'),'unreconciled + forged count=0: owner email cannot add itself either');
+await env.withSecurityRulesDisabled(async c=>{await setDoc(doc(c.firestore(),'adminSlots','reconciled'),{at:T});});
+// marker set out-of-band with legacy admins omitted: slots left over are still the only capacity
+
 await bad(addBatch(ctx('n1','n1@x.com'),'n1','s1'),'after reconcile with 5 full: sixth still denied');
 // 11 fresh project bootstrap
 await env.clearFirestore();
