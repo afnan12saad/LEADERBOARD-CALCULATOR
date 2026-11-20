@@ -18,8 +18,10 @@ let escalated=false;
 try{ await updateDoc(doc(att,'adminRequests','evil'),{status:'approved',approvedAt:serverTimestamp(),approvedBy:'self',updatedAt:serverTimestamp()});
  await setDoc(doc(att,'admins','evil'),{uid:'evil',email:'evil@x.com',name:'Evil',isFirstAdmin:false,createdAt:serverTimestamp()}); escalated=true;}catch(e){console.log('blocked at',e.message.slice(0,60));}
 ok('SECURITY: unapproved verified user can NOT self-approve into admins (escalated='+escalated+')', !escalated);
+// unreleased standings stay admin-only: flip the flag back, then probe
+await env.withSecurityRulesDisabled(async c=>{ await setDoc(doc(c.firestore(),'publicResults','leaderboard'),{published:false,totalJudges:0,totalTeams:0,totalSubmissions:0,entries:[],updatedAt:Timestamp.now()});});
 let lb=true; try{await getDoc(doc(att,'publicResults','leaderboard'));}catch(e){lb=false;}
-ok('SECURITY: that user can NOT read leaderboard (read='+lb+')', !lb);
+ok('SECURITY: that user can NOT read unreleased leaderboard (read='+lb+')', !lb);
 // legit path: existing admin approves the request, then the candidate is an admin
 const adm=env.authenticatedContext('first',{email:'afnan12saad@gmail.com',email_verified:true,firebase:{sign_in_provider:'password'}}).firestore();
 await env.withSecurityRulesDisabled(async c=>{ await setDoc(doc(c.firestore(),'adminRequests','good'),{...reqData,id:'good',uid:'good',email:'good@x.com',name:'Good',requestedAt:Timestamp.now(),updatedAt:Timestamp.now()}); });
