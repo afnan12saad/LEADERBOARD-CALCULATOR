@@ -7,9 +7,10 @@ import {
   Trash2,
 } from 'lucide-react';
 import { ConfirmDialog } from '../ConfirmDialog';
+import { useArenaAuth } from '../../context/ArenaAuthContext';
 import { LiveTimerDisplay } from '../LiveTimerDisplay';
 import {
-  resetAllEventDataToZero,
+  archiveAndStartNewEvent,
   saveEventSettings,
 } from '../../services/arenaService';
 import type {
@@ -48,6 +49,7 @@ export function AdminControlsPanel({
   evaluations,
   onNotify,
 }: AdminControlsPanelProps) {
+  const { user } = useArenaAuth();
   const initialDur = splitSecondsToHms(settings.timerDurationSeconds);
   const initialWarn = splitSecondsToHms(settings.timerWarningSeconds);
 
@@ -225,9 +227,11 @@ export function AdminControlsPanel({
   const handleResetAllZero = async () => {
     setBusy(true);
     try {
-      await resetAllEventDataToZero(settings);
+      await archiveAndStartNewEvent(settings, user?.email || 'admin');
       setResetConfirmOpen(false);
-      onNotify('Initialized everything to zero with only 15 default teams.');
+      onNotify(
+        'Results archived. New event ready: ratings and judges cleared, 15 default teams, admin accounts kept.',
+      );
     } finally {
       setBusy(false);
     }
@@ -599,10 +603,10 @@ export function AdminControlsPanel({
           <div className="pt-4 border-t border-[#183152] flex flex-col sm:flex-row sm:items-center justify-between gap-4">
             <div>
               <div className="text-sm font-bold text-red-400">
-                Initialize Everything to Zero (15 Teams)
+                Start New Event (archives results first)
               </div>
               <div className="text-xs text-slate-400 mt-0.5">
-                Resets all ratings, judges, and timer to zero, and populates 15 default teams.
+                Saves this event's final standings to the archive, then clears ratings, judges and the timer and sets up 15 default teams. Admin accounts are kept.
               </div>
             </div>
             <button
@@ -612,7 +616,7 @@ export function AdminControlsPanel({
               className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg border border-red-500/40 bg-red-950/40 text-red-300 text-xs font-semibold hover:bg-red-950/70 shrink-0"
             >
               <Trash2 className="w-4 h-4" />
-              Initialize 15 Teams to Zero
+              Start New Event
             </button>
           </div>
         </div>
@@ -620,11 +624,11 @@ export function AdminControlsPanel({
 
       <ConfirmDialog
         open={resetConfirmOpen}
-        title="Initialize Everything to Zero (15 Teams)"
-        message="This will reset all ratings and presentation progress to zero, clear registered judges, reset the event timer to 00:00:00, and initialize the system with exactly 15 default teams (Team 01 to Team 15). Administrator accounts will be preserved."
-        confirmLabel="Initialize 15 Teams to Zero"
+        title="Start New Event"
+        message="First the final standings of this event are saved to the archive. Then all ratings and presentation progress are cleared, registered judges are removed, the timer is reset to 00:00:00, and 15 default teams (Team 01 to Team 15) are created. Administrator accounts are kept. If saving the archive fails, nothing is reset."
+        confirmLabel="Archive and Start New Event"
         danger
-        requireTypedPhrase="INITIALIZE 15"
+        requireTypedPhrase="START NEW EVENT"
         busy={busy}
         onCancel={() => setResetConfirmOpen(false)}
         onConfirm={handleResetAllZero}
