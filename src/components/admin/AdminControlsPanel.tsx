@@ -1,8 +1,6 @@
 import { useEffect, useState } from 'react';
 import {
   Clock,
-  Eye,
-  EyeOff,
   Pause,
   Play,
   RotateCcw,
@@ -11,7 +9,6 @@ import {
 import { ConfirmDialog } from '../ConfirmDialog';
 import { LiveTimerDisplay } from '../LiveTimerDisplay';
 import {
-  publishOrHideResults,
   resetAllEventDataToZero,
   saveEventSettings,
 } from '../../services/arenaService';
@@ -20,7 +17,6 @@ import type {
   EventSettings,
   Judge,
   Team,
-  TieBreakerMode,
 } from '../../types/arena';
 import {
   clampWholeEventTimerSeconds,
@@ -220,51 +216,6 @@ export function AdminControlsPanel({
       await saveEventSettings({ ...settings, editingAllowed: next });
       onNotify(
         next ? 'Enabled rating editing for judges.' : 'Locked submitted ratings.',
-      );
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const handleTieModeChange = async (mode: TieBreakerMode) => {
-    setBusy(true);
-    try {
-      const updated = { ...settings, tieBreakerMode: mode };
-      await saveEventSettings(updated);
-      if (updated.resultsPublished) {
-        await publishOrHideResults({
-          publish: true,
-          teams,
-          judges,
-          evaluations,
-          settings: updated,
-        });
-      }
-      onNotify(
-        mode === 'tie'
-          ? 'Tie handling set to Allow Equal Ties.'
-          : 'Tie handling set to Admin Priority Order.',
-      );
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const handleTogglePublish = async () => {
-    setBusy(true);
-    try {
-      const nextPublish = !settings.resultsPublished;
-      await publishOrHideResults({
-        publish: nextPublish,
-        teams,
-        judges,
-        evaluations,
-        settings,
-      });
-      onNotify(
-        nextPublish
-          ? 'Final Top 2 spotlight & complete results released to all judges and participants.'
-          : 'Results hidden from judges and participants (Admin-only mode active).',
       );
     } finally {
       setBusy(false);
@@ -626,63 +577,23 @@ export function AdminControlsPanel({
             </button>
           </div>
 
-          <div className="pt-1">
-            <label
-              htmlFor="tie-breaker-mode"
-              className="block text-xs font-semibold text-slate-300 mb-1.5"
-            >
-              Equal Average Tie-Handling
-            </label>
-            <select
-              id="tie-breaker-mode"
-              value={settings.tieBreakerMode}
-              disabled={busy}
-              onChange={(e) =>
-                void handleTieModeChange(e.target.value as TieBreakerMode)
-              }
-              className={inputClass}
-            >
-              <option value="tie">Declare Equal Averages as Ties</option>
-              <option value="admin_order">
-                Break Ties by Team Tie-Breaker Priority
-              </option>
-            </select>
-          </div>
+          <p className="pt-1 text-xs text-slate-400 leading-relaxed">
+            Ranking uses the average rounded to 2 decimals. Teams with equal
+            rounded averages share the same rank (for example 1, 1, 3).
+          </p>
         </div>
 
         {/* Result Publication & Full Zero Reset */}
         <div className="bg-[#0D1E33] border border-[#1E3A5F] rounded-xl p-6 flex flex-col justify-between gap-6">
           <div className="space-y-3">
             <h3 className="text-base font-display font-bold text-white">
-              Leaderboard & Result Release
+              Leaderboard Visibility (Admin Only)
             </h3>
             <p className="text-xs text-slate-300 leading-relaxed">
-              {settings.resultsPublished
-                ? 'Results are Released. Judges, participants, and public screens can view the Top 2 spotlight winners and complete leaderboard.'
-                : 'Admin-Only Mode is active. The live leaderboard is visible exclusively to admins and stays hidden from judges and participants until release.'}
+              The live leaderboard is visible only to signed-in admins. Judges
+              and other users cannot open it. Open the Projector page to show
+              it on the event screen.
             </p>
-            <button
-              type="button"
-              disabled={busy}
-              onClick={() => void handleTogglePublish()}
-              className={`w-full min-h-[46px] inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg text-sm font-semibold transition-colors ${
-                settings.resultsPublished
-                  ? 'bg-[#142D4C] border border-[#2B4E7A] text-white hover:bg-[#1b3a61]'
-                  : 'bg-[#16A34A] text-white hover:bg-[#15803d]'
-              }`}
-            >
-              {settings.resultsPublished ? (
-                <>
-                  <EyeOff className="w-4 h-4" />
-                  Hide Results (Admin Only)
-                </>
-              ) : (
-                <>
-                  <Eye className="w-4 h-4" />
-                  Release Final Results to All Users
-                </>
-              )}
-            </button>
           </div>
 
           <div className="pt-4 border-t border-[#183152] flex flex-col sm:flex-row sm:items-center justify-between gap-4">
