@@ -37,12 +37,15 @@ await seed(2,3,false); db=as('a1','a1@x.com'); setDb(db);
 msg=''; try{await approveAdminJoinRequest(R('n1'),'a1@x.com')}catch(e){msg=e.message}
 ok('unreconciled: adding blocked', msg.length>0&&await adminCount(db)===5);
 const rr=await reconcileAdminSlots(); u=await getAdminSlotUsage();
-ok('reconcile assigns 3 legacy admins, nobody removed', rr.slotted===3&&u.reconciled&&u.used===5&&await adminCount(db)===5);
+ok('assign step slots 3 legacy admins, nobody removed, still NOT marked reconciled', rr.slotted===3&&!u.reconciled&&u.used===5&&await adminCount(db)===5);
+msg=''; try{await approveAdminJoinRequest(R('n1'),'a1@x.com')}catch(e){msg=e.message}
+ok('still blocked until the trusted marker exists', msg.length>0);
+await env.withSecurityRulesDisabled(async c=>{await setDoc(doc(c.firestore(),'adminSlots','reconciled'),{at:now()});});
 msg=''; try{await approveAdminJoinRequest(R('n1'),'a1@x.com')}catch(e){msg=e.message}
 ok('after reconcile at 5: add refused', msg.length>0&&await adminCount(db)===5);
 // D: already above cap (6 legacy): reconcile refuses, nothing changes
 await seed(0,6,false); db=as('L1','L1@x.com'); setDb(db);
 msg=''; try{await reconcileAdminSlots()}catch(e){msg=e.message}
 u=await getAdminSlotUsage();
-ok('over cap: reconcile refuses, nothing changed, all six keep access', /above the limit/.test(msg)&&!u.reconciled&&u.used===0&&await adminCount(db)===6);
+ok('over cap: assign refuses, nothing changed, all six keep access', /above the limit/.test(msg)&&!u.reconciled&&u.used===0&&await adminCount(db)===6);
 console.log(`\n${pass} passed, ${fail} failed`); await env.cleanup(); process.exit(fail?1:0);
