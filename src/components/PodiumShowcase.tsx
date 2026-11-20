@@ -1,4 +1,5 @@
 import { Crown, Star } from 'lucide-react';
+import { MotionConfig, motion } from 'motion/react';
 import type { LeaderboardEntry, Team } from '../types/arena';
 import { TrophyEmblem } from './TrophyEmblem';
 
@@ -71,6 +72,7 @@ export function PodiumShowcase({
   };
 
   return (
+    <MotionConfig reducedMotion="user">
     <div className="space-y-10">
       {/* Top 2 Spotlight Stage (inspired by leader_1ae5b02a.webp) */}
       <section aria-label="Top Two Winning Teams" className="pt-2">
@@ -90,8 +92,12 @@ export function PodiumShowcase({
             return (
               <div
                 key={item.teamId}
-                className="flex flex-col items-center transition-all duration-300"
-                style={{ paddingBottom: `${liftPx}px` }}
+                className="flex flex-col items-center transition-all duration-700 ease-out animate-reveal"
+                style={{
+                  paddingBottom: `${liftPx}px`,
+                  animationDelay: `${index * 120}ms`,
+                  animationFillMode: 'both',
+                }}
               >
                 {/* Vertical Spotlight Cone */}
                 <div
@@ -233,8 +239,12 @@ export function PodiumShowcase({
                   : 0;
 
               return (
-                <div
+                <motion.div
                   key={entry.teamId}
+                  layout="position"
+                  initial={{ opacity: 0, y: 8 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ type: 'spring', stiffness: 260, damping: 28 }}
                   className="rounded-xl bg-[#0D1A2B] border border-[#1B314E] px-4 sm:px-5 py-3.5 flex items-center justify-between gap-4 hover:bg-[#102238] transition-colors"
                 >
                   <div className="flex items-center gap-4 min-w-0 flex-1">
@@ -282,7 +292,7 @@ export function PodiumShowcase({
                       {/* Dynamic rating bar so spot strength scales with rating */}
                       <div className="mt-1.5 w-full max-w-xs h-1.5 bg-[#071422] rounded-sm overflow-hidden">
                         <div
-                          className="h-full bg-[#10B981] transition-all duration-300"
+                          className="h-full bg-[#10B981] transition-all duration-700 ease-out"
                           style={{ width: `${scorePct}%` }}
                         />
                       </div>
@@ -300,12 +310,13 @@ export function PodiumShowcase({
                         : '-'}
                     </div>
                   </div>
-                </div>
+                </motion.div>
               );
             })}
           </div>
         </section>
       )}
     </div>
+    </MotionConfig>
   );
 }
