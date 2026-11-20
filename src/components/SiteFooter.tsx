@@ -25,18 +25,18 @@ export function SiteFooter() {
         >
           {canSeeLeaderboardLinks && (
             <>
-              <Link to="/projector" className="hover:text-white transition-colors">
+              <Link to="/projector" className="inline-flex items-center min-h-[44px] hover:text-white transition-colors">
                 Projector Display
               </Link>
-              <Link to="/results" className="hover:text-white transition-colors">
+              <Link to="/results" className="inline-flex items-center min-h-[44px] hover:text-white transition-colors">
                 Final Results
               </Link>
             </>
           )}
-          <Link to="/privacy" className="hover:text-white transition-colors">
+          <Link to="/privacy" className="inline-flex items-center min-h-[44px] hover:text-white transition-colors">
             Privacy Policy
           </Link>
-          <Link to="/terms" className="hover:text-white transition-colors">
+          <Link to="/terms" className="inline-flex items-center min-h-[44px] hover:text-white transition-colors">
             Terms & Conditions
           </Link>
         </nav>
