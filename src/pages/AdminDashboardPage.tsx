@@ -18,6 +18,7 @@ import { SiteHeader } from '../components/SiteHeader';
 import { SiteFooter } from '../components/SiteFooter';
 import { LiveTimerDisplay } from '../components/LiveTimerDisplay';
 import { PodiumShowcase } from '../components/PodiumShowcase';
+import { LegacyRatingsNotice } from '../components/admin/LegacyRatingsNotice';
 import { AdminTeamsPanel } from '../components/admin/AdminTeamsPanel';
 import { AdminJudgesPanel } from '../components/admin/AdminJudgesPanel';
 import { AdminControlsPanel } from '../components/admin/AdminControlsPanel';
@@ -423,6 +424,7 @@ export function AdminDashboardPage() {
                     </button>
                   </div>
 
+                  <LegacyRatingsNotice entries={leaderboard} />
                   {leaderboard.length === 0 ? (
                     <div className="py-8 text-center space-y-2">
                       <p className="text-sm text-slate-300 font-medium">
@@ -463,7 +465,7 @@ export function AdminDashboardPage() {
                               Ratings Received
                             </th>
                             <th className="py-3 px-5 text-right">
-                              Average (/5)
+                              Average (/25)
                             </th>
                           </tr>
                         </thead>
@@ -493,7 +495,7 @@ export function AdminDashboardPage() {
                               </td>
                               <td className="py-3 px-5 text-right font-mono-tabular font-bold text-[#F5B942]">
                                 {entry.submittedCount > 0
-                                  ? `${entry.averageFormatted} / 5`
+                                  ? `${entry.averageFormatted} / 25`
                                   : 'Pending'}
                               </td>
                             </tr>
