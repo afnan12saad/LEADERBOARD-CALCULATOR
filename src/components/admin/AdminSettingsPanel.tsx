@@ -73,7 +73,7 @@ export function AdminSettingsPanel({
     setSlotBusy(true);
     try {
       const r = await reconcileAdminSlots();
-      onNotify(`Admin slots reconciled (${r.slotted} account${r.slotted === 1 ? '' : 's'} assigned).`);
+      onNotify(`${r.slotted} existing admin account${r.slotted === 1 ? '' : 's'} assigned to slots. Adding new admins stays paused until the setup is confirmed.`);
       refreshSlots();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unable to reconcile admin slots.');
@@ -463,7 +463,7 @@ export function AdminSettingsPanel({
         {slotUsage && !slotUsage.reconciled && (
           <div className="px-4 py-3 border-b border-[#152B46] bg-amber-950/30 text-xs text-amber-200 flex flex-wrap items-center justify-between gap-3">
             <span>
-              Adding new admins is paused until existing accounts are assigned to the five admin slots. Nobody loses access.
+              Adding new admins is paused until the existing admin list has been checked and the five-admin limit is confirmed. Nobody loses access.
             </span>
             <button
               type="button"
