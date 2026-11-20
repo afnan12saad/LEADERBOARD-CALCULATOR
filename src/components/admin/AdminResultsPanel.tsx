@@ -189,7 +189,7 @@ export function AdminResultsPanel({
                   settings,
                 )
               }
-              className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-[#16A34A] text-white text-xs font-semibold hover:bg-[#15803d] transition-colors"
+              className="inline-flex items-center gap-2 min-h-[44px] px-4 py-2 rounded-lg bg-[#16A34A] text-white text-xs font-semibold hover:bg-[#15803d] transition-colors"
             >
               <FileSpreadsheet className="w-4 h-4" />
               Export Excel (.xlsx)
@@ -197,7 +197,7 @@ export function AdminResultsPanel({
             <button
               type="button"
               onClick={() => exportLeaderboardCsv(leaderboard, settings)}
-              className="inline-flex items-center gap-2 px-4 py-2 rounded-lg border border-[#24436B] bg-[#091829] text-slate-200 text-xs font-semibold hover:bg-[#102640] transition-colors"
+              className="inline-flex items-center gap-2 min-h-[44px] px-4 py-2 rounded-lg border border-[#24436B] bg-[#091829] text-slate-200 text-xs font-semibold hover:bg-[#102640] transition-colors"
             >
               <FileText className="w-4 h-4" />
               Export CSV
@@ -212,7 +212,7 @@ export function AdminResultsPanel({
                   totalPossible,
                 )
               }
-              className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-[#2563EB] text-white text-xs font-semibold hover:bg-[#1d4ed8] transition-colors"
+              className="inline-flex items-center gap-2 min-h-[44px] px-4 py-2 rounded-lg bg-[#2563EB] text-white text-xs font-semibold hover:bg-[#1d4ed8] transition-colors"
             >
               <FileText className="w-4 h-4" />
               Export PDF
