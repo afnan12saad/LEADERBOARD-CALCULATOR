@@ -117,32 +117,6 @@ export function JudgeDashboardPage() {
           </div>
         </section>
 
-        {settings?.resultsPublished && (
-          <section className="bg-[#0D1E33] border border-[#16A34A]/60 rounded-xl p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-            <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-lg bg-[#16A34A]/20 text-[#4ADE80] flex items-center justify-center shrink-0">
-                <Award className="w-5 h-5" />
-              </div>
-              <div>
-                <div className="text-sm font-display font-bold text-white">
-                  Final Results Have Been Released
-                </div>
-                <p className="text-xs text-slate-300 mt-0.5">
-                  The Event Admin has published the official Top 2 winners and
-                  complete event standings.
-                </p>
-              </div>
-            </div>
-            <Link
-              to="/results"
-              className="min-h-[42px] inline-flex items-center justify-center gap-2 px-4 py-2 rounded-lg bg-[#16A34A] text-white text-xs font-semibold hover:bg-[#15803d] transition-colors whitespace-nowrap shrink-0"
-            >
-              <Award className="w-4 h-4" />
-              View Final Results
-            </Link>
-          </section>
-        )}
-
         {/* Judge Progress + Submission Status Notice */}
         <section className="grid grid-cols-1 md:grid-cols-3 gap-4">
           <div className="md:col-span-2 bg-[#0D1E33] border border-[#1E3A5F] rounded-xl p-5">
