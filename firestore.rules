@@ -545,9 +545,12 @@ service cloud.firestore {
       allow delete: if isValidEvalId(evalId) && isAdmin();
     }
 
-    // 10. Published Leaderboard (Gated strictly by resultsPublished == true)
+    // 10. Published Leaderboard (admin-only until released, then publicly readable)
     match /publicResults/{resultId} {
-      allow get: if isValidId(resultId) && resultId == 'leaderboard' && isAdmin();
+      // Standings become readable by everyone once an admin releases results
+      // (the doc's published flag is set only by the admin publish action).
+      allow get: if isValidId(resultId) && resultId == 'leaderboard' &&
+        (isAdmin() || resource.data.published == true);
       allow list: if false;
       allow create, update: if isValidId(resultId) && resultId == 'leaderboard' && isAdmin() && isValidLeaderboard(incoming()) && incoming().updatedAt == request.time;
       allow delete: if isValidId(resultId) && resultId == 'leaderboard' && isAdmin();
