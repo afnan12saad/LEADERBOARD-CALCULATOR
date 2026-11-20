@@ -469,7 +469,7 @@ service cloud.firestore {
 
     // 10. Published Leaderboard (Gated strictly by resultsPublished == true)
     match /publicResults/{resultId} {
-      allow get: if isValidId(resultId) && resultId == 'leaderboard' && (isAdmin() || isResultsPublished());
+      allow get: if isValidId(resultId) && resultId == 'leaderboard' && isAdmin();
       allow list: if false;
       allow create, update: if isValidId(resultId) && resultId == 'leaderboard' && isAdmin() && isValidLeaderboard(incoming()) && incoming().updatedAt == request.time;
       allow delete: if isValidId(resultId) && resultId == 'leaderboard' && isAdmin();
