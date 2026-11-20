@@ -466,5 +466,21 @@ service cloud.firestore {
       allow create, update: if isValidId(resultId) && resultId == 'leaderboard' && isAdmin() && isValidLeaderboard(incoming()) && incoming().updatedAt == request.time;
       allow delete: if isValidId(resultId) && resultId == 'leaderboard' && isAdmin();
     }
+
+    // 11. Event Archives (results of finished events, saved before a reset). Admin-only, write-once.
+    match /eventArchives/{archiveId} {
+      allow get, list: if isAdmin();
+      allow create: if isValidId(archiveId) && isAdmin() &&
+        incoming().keys().hasOnly(['eventName', 'archivedAt', 'archivedBy', 'totalJudges', 'totalTeams', 'totalSubmissions', 'entries']) &&
+        incoming().keys().hasAll(['eventName', 'archivedAt', 'archivedBy', 'totalJudges', 'totalTeams', 'totalSubmissions', 'entries']) &&
+        incoming().eventName is string && incoming().eventName.size() <= 160 &&
+        incoming().archivedBy is string && incoming().archivedBy.size() <= 160 &&
+        incoming().archivedAt == request.time &&
+        incoming().totalJudges is int && incoming().totalJudges >= 0 && incoming().totalJudges <= 100000 &&
+        incoming().totalTeams is int && incoming().totalTeams >= 0 && incoming().totalTeams <= 200 &&
+        incoming().totalSubmissions is int && incoming().totalSubmissions >= 0 && incoming().totalSubmissions <= 1000000 &&
+        incoming().entries is list && incoming().entries.size() <= 100;
+      allow update, delete: if false;
+    }
   }
 }
