@@ -7,6 +7,7 @@ import {
   onSnapshot,
   orderBy,
   query,
+  runTransaction,
   serverTimestamp,
   setDoc,
   updateDoc,
@@ -1108,7 +1109,11 @@ export async function resetEventEvaluations(
 
 export async function initializeEverythingToZeroWith15Teams(
   existingSettings?: EventSettings | null,
-  options?: { onlyIfNoRatings?: boolean; expectedRatingCount?: number },
+  options?: {
+    onlyIfNoRatings?: boolean;
+    expectedRatingCount?: number;
+    clearResetLock?: boolean;
+  },
 ): Promise<void> {
   try {
     const [evalsSnap, teamsSnap, judgesSnap, sessionsSnap, credsSnap] =
@@ -1189,6 +1194,9 @@ export async function initializeEverythingToZeroWith15Teams(
       updatedAt: serverTimestamp(),
     });
 
+    // Only the last write of a finished reset clears the in-progress marker.
+    if (options?.clearResetLock) batch.delete(doc(db, 'eventResets', 'current'));
+
     batch.set(doc(db, 'publicResults', 'leaderboard'), {
       published: false,
       totalJudges: 0,
@@ -1263,53 +1271,150 @@ export async function archiveCurrentEventResults(
   }
 }
 
-/** Archive the finished event, then reset for the next one. Admin accounts are kept. */
+export interface ResetState {
+  status: 'archiving' | 'deleting';
+  archiveId: string;
+  expectedRatingCount: number;
+  startedBy: string;
+  updatedAtMs: number;
+}
+
+/** A running reset is trusted for this long; after that another admin may take over. */
+const RESET_LOCK_STALE_MS = 3 * 60 * 1000;
+
+/** Present while a reset has started but not finished. Admin only. */
+export async function getResetState(): Promise<ResetState | null> {
+  const snap = await getDoc(doc(db, 'eventResets', 'current'));
+  if (!snap.exists()) return null;
+  const x = snap.data();
+  return {
+    status: x.status === 'deleting' ? 'deleting' : 'archiving',
+    archiveId: String(x.archiveId ?? ''),
+    expectedRatingCount: Number(x.expectedRatingCount ?? 0),
+    startedBy: String(x.startedBy ?? ''),
+    updatedAtMs: Number(x.updatedAtMs ?? 0),
+  };
+}
+
+/**
+ * Archive the finished event, then reset for the next one. Admin accounts are kept.
+ *
+ * Safety rules:
+ * - Only one reset runs at a time (a marker document taken in a transaction).
+ * - Submissions are closed first so no rating can arrive mid-reset.
+ * - Before anything is deleted, a failure puts everything back (marker removed,
+ *   submissions reopened, nothing lost).
+ * - Once deleting has started, submissions stay closed and the marker stays.
+ *   Running this again resumes the SAME reset and reuses the original archive;
+ *   it never archives a half-deleted event.
+ */
 export async function archiveAndStartNewEvent(
   settings: EventSettings,
   archivedBy: string,
 ): Promise<string> {
-  // 1. Close submissions so no rating can arrive between the archive and the reset.
-  const wasOpen = settings.submissionsOpen;
+  const lockRef = doc(db, 'eventResets', 'current');
   const settingsRef = doc(db, 'settings', 'event');
-  const reopen = async () => {
-    if (!wasOpen) return;
-    try {
-      await updateDoc(settingsRef, {
-        submissionsOpen: true,
-        updatedAt: serverTimestamp(),
-      });
-    } catch {
-      /* the admin can reopen submissions from Controls */
-    }
-  };
+  const wasOpen = settings.submissionsOpen;
+
+  // 1. Take the marker (or resume a reset that already started deleting).
+  let resume: ResetState | null = null;
   try {
-    await updateDoc(settingsRef, {
-      submissionsOpen: false,
-      updatedAt: serverTimestamp(),
+    await runTransaction(db, async (tx) => {
+      const snap = await tx.get(lockRef);
+      resume = null;
+      if (snap.exists()) {
+        const d = snap.data();
+        const fresh =
+          Date.now() - Number(d.updatedAtMs ?? 0) < RESET_LOCK_STALE_MS;
+        if (fresh) {
+          throw new Error(
+            'Another reset is already running. Wait a few minutes and try again.',
+          );
+        }
+        if (d.status === 'deleting') {
+          resume = {
+            status: 'deleting',
+            archiveId: String(d.archiveId ?? ''),
+            expectedRatingCount: Number(d.expectedRatingCount ?? 0),
+            startedBy: String(d.startedBy ?? ''),
+            updatedAtMs: Number(d.updatedAtMs ?? 0),
+          };
+        }
+      }
+      tx.set(lockRef, {
+        status: resume ? 'deleting' : 'archiving',
+        archiveId: resume ? (resume as ResetState).archiveId : '',
+        expectedRatingCount: resume
+          ? (resume as ResetState).expectedRatingCount
+          : 0,
+        startedBy: archivedBy.slice(0, 160),
+        updatedAtMs: Date.now(),
+      });
     });
   } catch (err) {
-    handleFirestoreError(err, OperationType.WRITE, 'settings/event');
+    if (err instanceof Error && /already running/.test(err.message)) throw err;
+    handleFirestoreError(err, OperationType.WRITE, 'eventResets/current');
   }
 
-  // 2. Save and verify the archive. 3. Reset only if nothing changed since.
+  // Undo for failures that happen before anything is deleted.
+  const undo = async () => {
+    try {
+      await writeBatch(db).delete(lockRef).commit();
+      if (wasOpen) {
+        await updateDoc(settingsRef, {
+          submissionsOpen: true,
+          updatedAt: serverTimestamp(),
+        });
+      }
+    } catch {
+      /* the stale marker expires on its own; submissions can be reopened in Controls */
+    }
+  };
+
   let archiveId: string;
-  let archivedRatings = 0;
-  try {
-    archiveId = await archiveCurrentEventResults(settings, archivedBy);
-    const saved = await getDoc(doc(db, 'eventArchives', archiveId));
-    archivedRatings = Number(saved.data()?.totalSubmissions ?? 0);
-  } catch (err) {
-    await reopen();
-    throw err;
+  if (resume) {
+    archiveId = (resume as ResetState).archiveId;
+  } else {
+    try {
+      // 2. Close submissions so no rating can arrive between archive and reset.
+      await updateDoc(settingsRef, {
+        submissionsOpen: false,
+        updatedAt: serverTimestamp(),
+      });
+      // 3. Save and verify the archive, then confirm nothing changed since.
+      archiveId = await archiveCurrentEventResults(settings, archivedBy);
+      const saved = await getDoc(doc(db, 'eventArchives', archiveId));
+      const archivedRatings = Number(saved.data()?.totalSubmissions ?? 0);
+      const now = await getDocs(collection(db, 'evaluations'));
+      if (now.size !== archivedRatings) {
+        throw new Error(
+          'Ratings changed after the archive was saved. Nothing was reset. Try again.',
+        );
+      }
+      // Point of no return: from here a failure keeps submissions closed.
+      await updateDoc(lockRef, {
+        status: 'deleting',
+        archiveId,
+        expectedRatingCount: archivedRatings,
+        updatedAtMs: Date.now(),
+      });
+    } catch (err) {
+      await undo();
+      throw err;
+    }
   }
+
+  // 4. Delete and recreate. On failure the marker stays so this can be resumed.
   try {
     await initializeEverythingToZeroWith15Teams(
       { ...settings, submissionsOpen: true },
-      { expectedRatingCount: archivedRatings },
+      { clearResetLock: true },
     );
   } catch (err) {
-    await reopen();
-    throw err;
+    throw new Error(
+      'The reset did not finish. Your results are archived and submissions stay closed. Run Start New Event again to resume.',
+      { cause: err },
+    );
   }
   return archiveId;
 }
