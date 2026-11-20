@@ -24,7 +24,7 @@ import type {
   AdminUser,
   EventSettings,
 } from '../../types/arena';
-import { MAX_ADMIN_USERS, buildAdminApprovalEmailUrl } from '../../utils/scoring';
+import { MAX_ADMIN_USERS } from '../../utils/scoring';
 import { ConfirmDialog } from '../ConfirmDialog';
 
 interface AdminSettingsPanelProps {
@@ -344,11 +344,10 @@ export function AdminSettingsPanel({
           <div>
             <h2 className="text-lg font-display font-bold text-white flex items-center gap-2">
               <Mail className="w-4 h-4 text-[#F5B942]" />
-              Admin Access Requests & Verification Codes
+              Admin Access Requests
             </h2>
             <p className="text-xs text-slate-400 mt-0.5">
-              New administrators request access with a 6-digit verification code.
-              Accepting adds them to the admin committee.
+              New administrators request access here. Accepting adds them to the admin committee, up to the limit of 5 admin accounts.
             </p>
           </div>
           <span className="px-2.5 py-1 rounded-md bg-[#081422] text-xs font-semibold font-mono-tabular text-[#F5B942]">
@@ -366,13 +365,6 @@ export function AdminSettingsPanel({
           <div className="divide-y divide-[#152B46]">
             {pendingRequests.map((req) => {
               const isActionBusy = actionBusyId === req.uid;
-              const mailto = buildAdminApprovalEmailUrl({
-                firstAdminEmail: req.firstAdminEmail,
-                candidateName: req.name,
-                candidateEmail: req.email,
-                code: req.verificationCode,
-                appUrl: window.location.origin,
-              });
 
               return (
                 <div
@@ -392,25 +384,9 @@ export function AdminSettingsPanel({
                     <div className="text-xs text-slate-300 font-mono-tabular">
                       {req.email}
                     </div>
-                    <div className="text-xs text-slate-400 flex items-center gap-2 pt-1">
-                      <span>Verification Code:</span>
-                      <span className="font-mono-tabular font-bold text-[#F5B942] bg-[#071322] px-2 py-0.5 rounded border border-[#1E3A5F] text-xs tracking-wider">
-                        {req.verificationCode}
-                      </span>
-                    </div>
                   </div>
 
                   <div className="flex flex-wrap items-center gap-2">
-                    <a
-                      href={mailto}
-                      target="_blank"
-                      rel="noreferrer"
-                      title="Open email notification"
-                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-[#24436B] bg-[#081422] text-xs font-semibold text-slate-300 hover:text-white hover:bg-[#102640] transition-colors"
-                    >
-                      <Send className="w-3 h-3 text-[#F5B942]" />
-                      Mail Code
-                    </a>
                     <button
                       type="button"
                       disabled={isActionBusy || adminLimitReached}
@@ -545,8 +521,7 @@ export function AdminSettingsPanel({
           <span>
             New co-organizers can register at{' '}
             <span className="font-mono-tabular text-white">/admin/login</span>.
-            Upon signing up, a 6-digit code will be sent to the primary
-            administrator for acceptance.
+            Each request needs an existing admin to accept it (maximum of 5 admin accounts in total).
           </span>
         </div>
       </div>
