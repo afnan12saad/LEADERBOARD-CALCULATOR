@@ -43,6 +43,7 @@ import {
   MAX_CRITERION_SCORE,
   MIN_CRITERION_SCORE,
   MAX_ADMIN_USERS,
+  ADMIN_SLOT_IDS,
   MAX_WHOLE_EVENT_TIMER_SECONDS,
   calculateLeaderboard,
   generateJudgeIdFromUid,
@@ -278,36 +279,128 @@ export async function createAdminJoinRequest(params: {
   }
 }
 
+export interface AdminSlotUsage {
+  used: number;
+  max: number;
+  reconciled: boolean;
+  free: string[];
+}
+
+/** Reads the five slot docs. Slots are the enforced cap (see firestore.rules). */
+export async function getAdminSlotUsage(): Promise<AdminSlotUsage> {
+  try {
+    const [slots, rec] = await Promise.all([
+      Promise.all(ADMIN_SLOT_IDS.map((id) => getDoc(doc(db, 'adminSlots', id)))),
+      getDoc(doc(db, 'adminSlots', 'reconciled')),
+    ]);
+    const free = ADMIN_SLOT_IDS.filter((_, i) => !slots[i].exists());
+    return {
+      used: MAX_ADMIN_USERS - free.length,
+      max: MAX_ADMIN_USERS,
+      reconciled: rec.exists(),
+      free: [...free],
+    };
+  } catch (err) {
+    handleFirestoreError(err, OperationType.GET, 'adminSlots');
+  }
+}
+
+const ADMIN_FULL_MESSAGE =
+  'The maximum of 5 admin accounts is reached (or slots have not been reconciled yet). Remove an admin before adding another.';
+
+/** Tries each free slot in turn so a concurrent winner only costs us a retry. */
+async function commitAdminWithFreeSlot(
+  adminUid: string,
+  build: (batch: ReturnType<typeof writeBatch>, slot: string) => void,
+): Promise<string> {
+  const usage = await getAdminSlotUsage();
+  if (!usage.reconciled || usage.free.length === 0) {
+    throw new Error(ADMIN_FULL_MESSAGE);
+  }
+  let lastErr: unknown = null;
+  for (const slot of usage.free) {
+    const batch = writeBatch(db);
+    build(batch, slot);
+    batch.set(doc(db, 'adminSlots', slot), {
+      uid: adminUid,
+      createdAt: serverTimestamp(),
+    });
+    try {
+      await batch.commit();
+      return slot;
+    } catch (err) {
+      lastErr = err;
+    }
+  }
+  if (lastErr) {
+    throw new Error(ADMIN_FULL_MESSAGE);
+  }
+  throw new Error(ADMIN_FULL_MESSAGE);
+}
+
+/**
+ * One-time, admin-run step: gives every existing unslotted admin a slot and
+ * sets the "reconciled" marker. Refuses when more than five admins exist.
+ */
+export async function reconcileAdminSlots(): Promise<{ slotted: number }> {
+  const adminsSnap = await getDocs(collection(db, 'admins'));
+  const unslotted = adminsSnap.docs.filter((d) => !(d.data() as { slot?: string }).slot);
+  const taken = new Set(
+    adminsSnap.docs
+      .map((d) => (d.data() as { slot?: string }).slot)
+      .filter((x): x is string => Boolean(x)),
+  );
+  const free = ADMIN_SLOT_IDS.filter((id) => !taken.has(id));
+  if (adminsSnap.size > MAX_ADMIN_USERS || unslotted.length > free.length) {
+    throw new Error(
+      `There are ${adminsSnap.size} admin accounts, above the limit of 5. Remove accounts first; nothing was changed.`,
+    );
+  }
+  const batch = writeBatch(db);
+  unslotted.forEach((d, i) => {
+    batch.update(doc(db, 'admins', d.id), { slot: free[i] });
+    batch.set(doc(db, 'adminSlots', free[i]), {
+      uid: d.id,
+      createdAt: serverTimestamp(),
+    });
+  });
+  batch.set(doc(db, 'adminSlots', 'reconciled'), { at: serverTimestamp() });
+  try {
+    await batch.commit();
+  } catch (err) {
+    handleFirestoreError(err, OperationType.WRITE, 'adminSlots');
+  }
+  return { slotted: unslotted.length };
+}
+
 export async function approveAdminJoinRequest(
   request: AdminRequest,
   approvedByEmail: string,
 ): Promise<void> {
-  const batch = writeBatch(db);
-  batch.update(doc(db, 'adminRequests', request.uid), {
-    status: 'approved',
-    approvedAt: serverTimestamp(),
-    approvedBy: approvedByEmail.trim().slice(0, 160),
-    updatedAt: serverTimestamp(),
-  });
-  batch.set(doc(db, 'admins', request.uid), {
-    uid: request.uid,
-    email: request.email,
-    name: request.name,
-    isFirstAdmin: false,
-    createdAt: serverTimestamp(),
-  });
-  batch.set(
-    doc(db, 'publicStats', 'adminQuota'),
-    {
-      count: increment(1),
-      updatedAt: serverTimestamp(),
-    },
-    { merge: true },
-  );
-
   try {
-    await batch.commit();
+    await commitAdminWithFreeSlot(request.uid, (batch, slot) => {
+      batch.update(doc(db, 'adminRequests', request.uid), {
+        status: 'approved',
+        approvedAt: serverTimestamp(),
+        approvedBy: approvedByEmail.trim().slice(0, 160),
+        updatedAt: serverTimestamp(),
+      });
+      batch.set(doc(db, 'admins', request.uid), {
+        uid: request.uid,
+        email: request.email,
+        name: request.name,
+        isFirstAdmin: false,
+        slot,
+        createdAt: serverTimestamp(),
+      });
+      batch.set(
+        doc(db, 'publicStats', 'adminQuota'),
+        { count: increment(1), updatedAt: serverTimestamp() },
+        { merge: true },
+      );
+    });
   } catch (err) {
+    if (err instanceof Error && err.message === ADMIN_FULL_MESSAGE) throw err;
     handleFirestoreError(err, OperationType.WRITE, `admins/${request.uid}`);
   }
 }
@@ -361,8 +454,14 @@ export async function claimAdminSlot(
       email: cleanEmail,
       name: cleanName,
       isFirstAdmin: true,
+      slot: 's1',
       createdAt: serverTimestamp(),
     });
+    batch.set(doc(db, 'adminSlots', 's1'), {
+      uid: user.uid,
+      createdAt: serverTimestamp(),
+    });
+    batch.set(doc(db, 'adminSlots', 'reconciled'), { at: serverTimestamp() });
     batch.set(
       doc(db, 'publicStats', 'adminQuota'),
       {
@@ -395,26 +494,24 @@ export async function claimAdminSlot(
     );
   }
 
-  const batch = writeBatch(db);
-  batch.set(doc(db, 'admins', user.uid), {
-    uid: user.uid,
-    email: cleanEmail,
-    name: cleanName,
-    isFirstAdmin: false,
-    createdAt: serverTimestamp(),
-  });
-  batch.set(
-    doc(db, 'publicStats', 'adminQuota'),
-    {
-      count: increment(1),
-      updatedAt: serverTimestamp(),
-    },
-    { merge: true },
-  );
-
   try {
-    await batch.commit();
+    await commitAdminWithFreeSlot(user.uid, (batch, slot) => {
+      batch.set(doc(db, 'admins', user.uid), {
+        uid: user.uid,
+        email: cleanEmail,
+        name: cleanName,
+        isFirstAdmin: false,
+        slot,
+        createdAt: serverTimestamp(),
+      });
+      batch.set(
+        doc(db, 'publicStats', 'adminQuota'),
+        { count: increment(1), updatedAt: serverTimestamp() },
+        { merge: true },
+      );
+    });
   } catch (err) {
+    if (err instanceof Error && err.message === ADMIN_FULL_MESSAGE) throw err;
     handleFirestoreError(err, OperationType.WRITE, `admins/${user.uid}`);
   }
 
@@ -429,8 +526,13 @@ export async function claimAdminSlot(
 export async function removeAdminAccount(targetUid: string): Promise<void> {
   try {
     const currentCount = await getLiveAdminQuotaCount();
+    const targetSnap = await getDoc(doc(db, 'admins', targetUid));
+    const targetSlot = targetSnap.exists()
+      ? (targetSnap.data() as { slot?: string }).slot
+      : undefined;
     const batch = writeBatch(db);
     batch.delete(doc(db, 'admins', targetUid));
+    if (targetSlot) batch.delete(doc(db, 'adminSlots', targetSlot));
     batch.set(
       doc(db, 'publicStats', 'adminQuota'),
       {
