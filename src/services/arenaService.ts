@@ -26,6 +26,7 @@ import type {
   AdminQuota,
   AdminRequest,
   AdminUser,
+  CriteriaScores,
   Evaluation,
   EventSettings,
   Judge,
@@ -37,14 +38,21 @@ import type {
   Team,
 } from '../types/arena';
 import {
+  CRITERIA,
   INITIAL_15_TEAMS,
+  MAX_CRITERION_SCORE,
+  MIN_CRITERION_SCORE,
   MAX_ADMIN_USERS,
   MAX_WHOLE_EVENT_TIMER_SECONDS,
   calculateLeaderboard,
   generateJudgeIdFromUid,
   generateVerificationCode,
+  MAX_TOTAL_SCORE,
+  isScoredEvaluation,
   isValidStarRating,
+  isValidCriteriaScores,
   slugifyTeamId,
+  sumCriteria,
   validateJudgeNameAndEmail,
 } from '../utils/scoring';
 
@@ -681,18 +689,25 @@ export async function claimJudgeSlot(
   }
 }
 
-export async function submitOverallRating(params: {
+export async function submitCriteriaScores(params: {
   judgeId: string;
   judgeUid: string;
   teamId: string;
-  rating: number;
+  criteria: CriteriaScores;
   comment: string;
   isEdit: boolean;
 }): Promise<void> {
-  const { judgeId, judgeUid, teamId, rating, comment, isEdit } = params;
-  if (!isValidStarRating(rating)) {
-    throw new Error('Select an overall rating between 1 and 5 stars.');
+  const { judgeId, judgeUid, teamId, criteria, comment, isEdit } = params;
+  if (!isValidCriteriaScores(criteria)) {
+    throw new Error(
+      `Score every criterion from ${MIN_CRITERION_SCORE} to ${MAX_CRITERION_SCORE}.`,
+    );
   }
+  // Store exactly the five known keys, and a total computed here from them.
+  const clean = Object.fromEntries(
+    CRITERIA.map(({ id }) => [id, criteria[id]]),
+  ) as CriteriaScores;
+  const total = sumCriteria(clean);
 
   const cleanComment = comment.trim().slice(0, 1000);
   const evalId = `${judgeId}_${teamId}`;
@@ -701,7 +716,8 @@ export async function submitOverallRating(params: {
   if (isEdit) {
     try {
       await updateDoc(doc(db, 'evaluations', evalId), {
-        rating,
+        criteria: clean,
+        total,
         comment: cleanComment,
         updatedAt: serverTimestamp(),
       });
@@ -717,7 +733,9 @@ export async function submitOverallRating(params: {
     judgeId,
     judgeUid,
     teamId,
-    rating,
+    scoreVersion: 2,
+    criteria: clean,
+    total,
     comment: cleanComment,
     createdAt: serverTimestamp(),
     updatedAt: serverTimestamp(),
@@ -1235,16 +1253,37 @@ export async function archiveCurrentEventResults(
       teams,
       evaluations,
       judgesSnap.size,
-    ).map((e) => ({
-      rank: e.rank,
-      isTied: e.isTied,
-      teamName: e.teamName,
-      projectTitle: e.projectTitle,
-      averageRating: e.averageRating,
-      averageFormatted: e.averageFormatted,
-      submittedCount: e.submittedCount,
-      totalJudges: e.totalJudges,
-    }));
+    ).map((e) => {
+      // Old single 1-5 ratings are kept as their own standings (never /25).
+      const old = evaluations.filter(
+        (ev) =>
+          ev.teamId === e.teamId &&
+          !isScoredEvaluation(ev) &&
+          isValidStarRating(ev.rating),
+      );
+      const oldAvg = old.length
+        ? Math.round(
+            (old.reduce((a, ev) => a + (ev.rating as number), 0) / old.length) *
+              100 +
+              1e-9,
+          ) / 100
+        : null;
+      return {
+        rank: e.rank,
+        isTied: e.isTied,
+        teamName: e.teamName,
+        projectTitle: e.projectTitle,
+        averageRating: e.averageRating,
+        averageFormatted: e.averageFormatted,
+        submittedCount: e.submittedCount,
+        totalJudges: e.totalJudges,
+        legacyCount: old.length,
+        legacyAverageFormatted: oldAvg === null ? '' : oldAvg.toFixed(2),
+      };
+    });
+    const legacyRatings = evaluations.filter(
+      (ev) => !isScoredEvaluation(ev) && isValidStarRating(ev.rating),
+    ).length;
     const archiveId = `ev_${Date.now()}`;
     const ref = doc(db, 'eventArchives', archiveId);
     await setDoc(ref, {
@@ -1255,6 +1294,11 @@ export async function archiveCurrentEventResults(
       totalTeams: teams.length,
       totalSubmissions: evaluations.length,
       entries,
+      // Scale of `averageFormatted` (five criteria, 0-25) and of the old
+      // single-rating averages kept in `legacyAverageFormatted` (1-5).
+      scoreMax: MAX_TOTAL_SCORE,
+      legacyMax: 5,
+      legacyRatings,
     });
     const check = await getDoc(ref);
     const saved = check.data();
@@ -1455,7 +1499,13 @@ export interface EventArchive {
     projectTitle?: string;
     averageFormatted: string;
     submittedCount?: number;
+    legacyCount?: number;
+    legacyAverageFormatted?: string;
   }[];
+  /** Scale of `averageFormatted`. Missing on archives made before the five-criteria change (those are 1-5). */
+  scoreMax?: number;
+  legacyMax?: number;
+  legacyRatings?: number;
 }
 
 /** Archived results of earlier events, newest first. Admin only (rules enforce it). */
@@ -1474,6 +1524,9 @@ export async function listEventArchives(): Promise<EventArchive[]> {
           totalTeams: Number(x.totalTeams ?? 0),
           totalSubmissions: Number(x.totalSubmissions ?? 0),
           entries: Array.isArray(x.entries) ? x.entries : [],
+          scoreMax: typeof x.scoreMax === 'number' ? x.scoreMax : undefined,
+          legacyMax: typeof x.legacyMax === 'number' ? x.legacyMax : undefined,
+          legacyRatings: typeof x.legacyRatings === 'number' ? x.legacyRatings : undefined,
         } as EventArchive;
       })
       .sort((a, b) => b.archivedAtMs - a.archivedAtMs);
