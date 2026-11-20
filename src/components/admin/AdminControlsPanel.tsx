@@ -11,6 +11,7 @@ import { useArenaAuth } from '../../context/ArenaAuthContext';
 import { LiveTimerDisplay } from '../LiveTimerDisplay';
 import {
   archiveAndStartNewEvent,
+  getResetState,
   saveEventSettings,
 } from '../../services/arenaService';
 import type {
@@ -63,6 +64,14 @@ export function AdminControlsPanel({
 
   const [busy, setBusy] = useState(false);
   const [resetConfirmOpen, setResetConfirmOpen] = useState(false);
+  const [resetPending, setResetPending] = useState(false);
+  const refreshResetState = () =>
+    getResetState()
+      .then((r) => setResetPending(r !== null))
+      .catch(() => {});
+  useEffect(() => {
+    refreshResetState();
+  }, []);
 
   useEffect(() => {
     const dur = splitSecondsToHms(settings.timerDurationSeconds);
@@ -232,8 +241,12 @@ export function AdminControlsPanel({
       onNotify(
         'Results archived. New event ready: ratings and judges cleared, 15 default teams, admin accounts kept.',
       );
+    } catch (err) {
+      setResetConfirmOpen(false);
+      onNotify(err instanceof Error ? err.message : 'The reset failed.');
     } finally {
       setBusy(false);
+      refreshResetState();
     }
   };
 
@@ -605,6 +618,11 @@ export function AdminControlsPanel({
               <div className="text-sm font-bold text-red-400">
                 Start New Event (archives results first)
               </div>
+              {resetPending && (
+                <div className="text-xs text-amber-300 mt-1 font-semibold">
+                  A reset was started and not finished. Submissions stay closed. Run it again to resume. The original archive is reused.
+                </div>
+              )}
               <div className="text-xs text-slate-400 mt-0.5">
                 Saves this event's final standings to the archive, then clears ratings, judges and the timer and sets up 15 default teams. Admin accounts are kept.
               </div>
@@ -616,7 +634,7 @@ export function AdminControlsPanel({
               className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg border border-red-500/40 bg-red-950/40 text-red-300 text-xs font-semibold hover:bg-red-950/70 shrink-0"
             >
               <Trash2 className="w-4 h-4" />
-              Start New Event
+              {resetPending ? 'Resume Start New Event' : 'Start New Event'}
             </button>
           </div>
         </div>
@@ -626,7 +644,7 @@ export function AdminControlsPanel({
         open={resetConfirmOpen}
         title="Start New Event"
         message="First the final standings of this event are saved to the archive. Then all ratings and presentation progress are cleared, registered judges are removed, the timer is reset to 00:00:00, and 15 default teams (Team 01 to Team 15) are created. Administrator accounts are kept. If saving the archive fails, nothing is reset."
-        confirmLabel="Archive and Start New Event"
+        confirmLabel={resetPending ? 'Resume Reset' : 'Archive and Start New Event'}
         danger
         requireTypedPhrase="START NEW EVENT"
         busy={busy}
