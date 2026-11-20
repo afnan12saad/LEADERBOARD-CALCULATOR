@@ -339,8 +339,10 @@ async function commitAdminWithFreeSlot(
 }
 
 /**
- * One-time, admin-run step: gives every existing unslotted admin a slot and
- * sets the "reconciled" marker. Refuses when more than five admins exist.
+ * Assigns a slot to every existing unslotted admin (nobody loses access). It does NOT
+ * mark the installation reconciled: new admins stay blocked until a trusted migration
+ * sets the adminSlots/reconciled marker after checking the full admin list.
+ * Refuses when more than five admins exist.
  */
 export async function reconcileAdminSlots(): Promise<{ slotted: number }> {
   const adminsSnap = await getDocs(collection(db, 'admins'));
@@ -364,7 +366,6 @@ export async function reconcileAdminSlots(): Promise<{ slotted: number }> {
       createdAt: serverTimestamp(),
     });
   });
-  batch.set(doc(db, 'adminSlots', 'reconciled'), { at: serverTimestamp() });
   try {
     await batch.commit();
   } catch (err) {
