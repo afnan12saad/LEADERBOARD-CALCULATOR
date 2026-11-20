@@ -66,12 +66,20 @@ export interface JudgeSession {
   createdAt?: unknown;
 }
 
+export type CriterionId = 'c1' | 'c2' | 'c3' | 'c4' | 'c5';
+export type CriteriaScores = Record<CriterionId, number>;
+
 export interface Evaluation {
   id: string;
   judgeId: string;
   judgeUid: string;
   teamId: string;
-  rating: number;
+  /** Legacy single 1-5 overall rating. Absent on scoreVersion 2 evaluations. */
+  rating?: number;
+  /** scoreVersion 2: five criteria scores plus their sum. */
+  scoreVersion?: 2;
+  criteria?: CriteriaScores;
+  total?: number;
   comment: string;
   createdAt?: unknown;
   updatedAt?: unknown;
@@ -88,6 +96,8 @@ export interface LeaderboardEntry {
   averageFormatted: string;
   ratingSum: number;
   submittedCount: number;
+  /** Old single-rating evaluations for this team; NOT included in the score. */
+  legacyCount?: number;
   totalJudges: number;
 }
 
