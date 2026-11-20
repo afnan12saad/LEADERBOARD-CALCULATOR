@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { MAX_TOTAL_SCORE } from '../utils/scoring';
 import { ArrowUp, Crown, Star } from 'lucide-react';
 import { MotionConfig, animate, motion, useReducedMotion } from 'motion/react';
 import type { LeaderboardEntry, Team } from '../types/arena';
@@ -92,7 +93,7 @@ export function PodiumShowcase({
   entries,
   teams = [],
   showProjectTitle = true,
-  subtitle = 'Teams ranked 1st and 2nd (ties share a rank) are highlighted by their live average rating out of 5.',
+  subtitle = 'Teams ranked 1st and 2nd (ties share a rank) are highlighted by their live average rating out of 25.',
 }: PodiumShowcaseProps) {
   const risers = useRisers(entries);
   if (entries.length === 0) {
@@ -121,7 +122,7 @@ export function PodiumShowcase({
 
   const getSpotLiftPx = (entry: LeaderboardEntry, index: number): number => {
     if (entry.submittedCount === 0) return 0;
-    const baseByScore = (entry.averageRating / 5) * 44;
+    const baseByScore = (entry.averageRating / MAX_TOTAL_SCORE) * 44;
     if (topTwo.length >= 2 && topTwo.every((e) => e.rank === topTwo[0].rank)) {
       return Math.round(baseByScore + 18);
     }
@@ -289,7 +290,7 @@ export function PodiumShowcase({
                     />
                     <span>
                       {item.submittedCount > 0 ? (
-                        <CountUp value={Number(item.averageFormatted)} suffix=" / 5" />
+                        <CountUp value={Number(item.averageFormatted)} suffix=" / 25" />
                       ) : (
                         'Pending'
                       )}
@@ -335,7 +336,7 @@ export function PodiumShowcase({
               const logoUrl = teamLogoMap.get(entry.teamId);
               const scorePct =
                 entry.submittedCount > 0
-                  ? Math.min(100, Math.round((entry.averageRating / 5) * 100))
+                  ? Math.min(100, Math.round((entry.averageRating / MAX_TOTAL_SCORE) * 100))
                   : 0;
 
               return (
@@ -411,7 +412,7 @@ export function PodiumShowcase({
 
                     <div className="w-24 text-right font-mono-tabular text-sm sm:text-base font-bold text-[#10B981]">
                       {entry.submittedCount > 0 ? (
-                        <CountUp value={Number(entry.averageFormatted)} suffix=" / 5" />
+                        <CountUp value={Number(entry.averageFormatted)} suffix=" / 25" />
                       ) : (
                         '-'
                       )}
