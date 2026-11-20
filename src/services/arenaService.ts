@@ -1108,7 +1108,7 @@ export async function resetEventEvaluations(
 
 export async function initializeEverythingToZeroWith15Teams(
   existingSettings?: EventSettings | null,
-  options?: { onlyIfNoRatings?: boolean },
+  options?: { onlyIfNoRatings?: boolean; expectedRatingCount?: number },
 ): Promise<void> {
   try {
     const [evalsSnap, teamsSnap, judgesSnap, sessionsSnap, credsSnap] =
@@ -1122,6 +1122,16 @@ export async function initializeEverythingToZeroWith15Teams(
 
     // Automatic first-run setup must never wipe an event that already has ratings.
     if (options?.onlyIfNoRatings && !evalsSnap.empty) return;
+
+    // If ratings changed since the archive was taken, stop before deleting anything.
+    if (
+      options?.expectedRatingCount !== undefined &&
+      evalsSnap.size !== options.expectedRatingCount
+    ) {
+      throw new Error(
+        'Ratings changed after the archive was saved. Nothing was reset. Try again.',
+      );
+    }
 
     // A full event has thousands of ratings, so delete in modest chunks rather
     // than one huge request (keeps each request small and a failure recoverable). The small final batch
@@ -1237,7 +1247,14 @@ export async function archiveCurrentEventResults(
       entries,
     });
     const check = await getDoc(ref);
-    if (!check.exists()) {
+    const saved = check.data();
+    if (
+      !check.exists() ||
+      !saved ||
+      saved.totalSubmissions !== evaluations.length ||
+      !Array.isArray(saved.entries) ||
+      saved.entries.length !== entries.length
+    ) {
       throw new Error('The archive could not be confirmed. Nothing was reset.');
     }
     return archiveId;
@@ -1251,9 +1268,92 @@ export async function archiveAndStartNewEvent(
   settings: EventSettings,
   archivedBy: string,
 ): Promise<string> {
-  const archiveId = await archiveCurrentEventResults(settings, archivedBy);
-  await initializeEverythingToZeroWith15Teams(settings);
+  // 1. Close submissions so no rating can arrive between the archive and the reset.
+  const wasOpen = settings.submissionsOpen;
+  const settingsRef = doc(db, 'settings', 'event');
+  const reopen = async () => {
+    if (!wasOpen) return;
+    try {
+      await updateDoc(settingsRef, {
+        submissionsOpen: true,
+        updatedAt: serverTimestamp(),
+      });
+    } catch {
+      /* the admin can reopen submissions from Controls */
+    }
+  };
+  try {
+    await updateDoc(settingsRef, {
+      submissionsOpen: false,
+      updatedAt: serverTimestamp(),
+    });
+  } catch (err) {
+    handleFirestoreError(err, OperationType.WRITE, 'settings/event');
+  }
+
+  // 2. Save and verify the archive. 3. Reset only if nothing changed since.
+  let archiveId: string;
+  let archivedRatings = 0;
+  try {
+    archiveId = await archiveCurrentEventResults(settings, archivedBy);
+    const saved = await getDoc(doc(db, 'eventArchives', archiveId));
+    archivedRatings = Number(saved.data()?.totalSubmissions ?? 0);
+  } catch (err) {
+    await reopen();
+    throw err;
+  }
+  try {
+    await initializeEverythingToZeroWith15Teams(
+      { ...settings, submissionsOpen: true },
+      { expectedRatingCount: archivedRatings },
+    );
+  } catch (err) {
+    await reopen();
+    throw err;
+  }
   return archiveId;
+}
+
+export interface EventArchive {
+  id: string;
+  eventName: string;
+  archivedAtMs: number;
+  archivedBy: string;
+  totalJudges: number;
+  totalTeams: number;
+  totalSubmissions: number;
+  entries: {
+    rank: number;
+    isTied?: boolean;
+    teamName: string;
+    projectTitle?: string;
+    averageFormatted: string;
+    submittedCount?: number;
+  }[];
+}
+
+/** Archived results of earlier events, newest first. Admin only (rules enforce it). */
+export async function listEventArchives(): Promise<EventArchive[]> {
+  try {
+    const snap = await getDocs(collection(db, 'eventArchives'));
+    return snap.docs
+      .map((d) => {
+        const x = d.data();
+        return {
+          id: d.id,
+          eventName: String(x.eventName ?? ''),
+          archivedAtMs: x.archivedAt?.toMillis?.() ?? 0,
+          archivedBy: String(x.archivedBy ?? ''),
+          totalJudges: Number(x.totalJudges ?? 0),
+          totalTeams: Number(x.totalTeams ?? 0),
+          totalSubmissions: Number(x.totalSubmissions ?? 0),
+          entries: Array.isArray(x.entries) ? x.entries : [],
+        } as EventArchive;
+      })
+      .sort((a, b) => b.archivedAtMs - a.archivedAtMs);
+  } catch (err) {
+    handleFirestoreError(err, OperationType.LIST, 'eventArchives');
+  }
 }
 
 export async function resetAllEventDataToZero(
