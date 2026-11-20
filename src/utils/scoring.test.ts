@@ -9,8 +9,13 @@ import {
   generateNextJudgeCode,
   getTeamStatusForJudge,
   isValidStarRating,
+  CRITERIA,
+  MAX_TOTAL_SCORE,
+  isScoredEvaluation,
+  isValidCriteriaScores,
+  sumCriteria,
 } from './scoring';
-import type { Evaluation, Judge, Team } from '../types/arena';
+import type { CriteriaScores, Evaluation, Judge, Team } from '../types/arena';
 
 const makeTeam = (
   id: string,
@@ -30,7 +35,33 @@ const makeTeam = (
   submittedCount: 0,
 });
 
+// Builds a valid five-criteria evaluation whose TOTAL is `total` (0-25),
+// spread over the criteria so each stays within 0-5.
+const spread = (total: number): CriteriaScores => {
+  let left = total;
+  const out = {} as CriteriaScores;
+  for (const id of ['c1', 'c2', 'c3', 'c4', 'c5'] as const) {
+    const v = Math.min(5, left);
+    out[id] = v;
+    left -= v;
+  }
+  return out;
+};
 const makeEval = (
+  judgeId: string,
+  teamId: string,
+  total: number,
+): Evaluation => ({
+  id: `${judgeId}_${teamId}`,
+  judgeId,
+  judgeUid: `uid-${judgeId}`,
+  teamId,
+  scoreVersion: 2,
+  criteria: spread(total),
+  total,
+  comment: '',
+});
+const makeLegacy = (
   judgeId: string,
   teamId: string,
   rating: number,
@@ -351,4 +382,73 @@ test('x.xx5 averages round half up consistently for rank and display', () => {
   assert.equal(board[0].rank, 1);
   assert.equal(board[1].rank, 1);
   assert.equal(board[0].isTied && board[1].isTied, true);
+});
+
+test('five criteria use the exact labels and total 25', () => {
+  assert.deepEqual(
+    CRITERIA.map((c) => c.label),
+    [
+      'Innovation & Originality',
+      'Problem Relevance & Impact',
+      'Technical Implementation',
+      'Presentation & Communication',
+      'Feasibility & Scalability',
+    ],
+  );
+  assert.equal(MAX_TOTAL_SCORE, 25);
+});
+
+test('criteria validation: 0 to 5 integers, all five required, zero is a real score', () => {
+  const ok = { c1: 0, c2: 0, c3: 0, c4: 0, c5: 0 };
+  assert.equal(isValidCriteriaScores(ok), true);
+  assert.equal(sumCriteria(ok), 0);
+  assert.equal(isValidCriteriaScores({ c1: 5, c2: 5, c3: 5, c4: 5, c5: 5 }), true);
+  assert.equal(isValidCriteriaScores({ ...ok, c3: 6 }), false);
+  assert.equal(isValidCriteriaScores({ ...ok, c3: -1 }), false);
+  assert.equal(isValidCriteriaScores({ ...ok, c3: 2.5 }), false);
+  assert.equal(isValidCriteriaScores({ c1: 1, c2: 1, c3: 1, c4: 1 }), false);
+  assert.equal(isValidCriteriaScores({ ...ok, c5: undefined }), false);
+});
+
+test('leaderboard averages per-judge totals out of 25; a zero total still counts as a submission', () => {
+  const teams = [makeTeam('a', 'A', 1), makeTeam('b', 'B', 2)];
+  const evs = [
+    makeEval('j1', 'a', 25),
+    makeEval('j2', 'a', 20),
+    makeEval('j1', 'b', 0),
+    makeEval('j2', 'b', 0),
+  ];
+  const lb = calculateLeaderboard(teams, evs, 2);
+  assert.equal(lb[0].teamId, 'a');
+  assert.equal(lb[0].averageFormatted, '22.50');
+  assert.equal(lb[0].ratingSum, 45);
+  assert.equal(lb[1].averageFormatted, '0.00');
+  assert.equal(lb[1].submittedCount, 2);
+  assert.equal(lb[1].rank, 2);
+});
+
+test('an unscored team ranks below a team with all-zero scores', () => {
+  const teams = [makeTeam('a', 'A', 1), makeTeam('b', 'B', 2)];
+  const lb = calculateLeaderboard(teams, [makeEval('j1', 'b', 0)], 1);
+  assert.equal(lb[0].teamId, 'b');
+  assert.equal(lb[0].submittedCount, 1);
+});
+
+test('legacy 1-5 ratings are never mixed into the 25-point standings and are reported', () => {
+  const teams = [makeTeam('a', 'A', 1)];
+  const lb = calculateLeaderboard(
+    teams,
+    [makeLegacy('j1', 'a', 5), makeEval('j2', 'a', 10)],
+    2,
+  );
+  assert.equal(lb[0].averageFormatted, '10.00');
+  assert.equal(lb[0].submittedCount, 1);
+  assert.equal(lb[0].legacyCount, 1);
+});
+
+test('tampered evaluations (total not matching criteria) are not scored', () => {
+  const bad: Evaluation = { ...makeEval('j1', 'a', 10), total: 25 };
+  assert.equal(isScoredEvaluation(bad), false);
+  const lb = calculateLeaderboard([makeTeam('a', 'A', 1)], [bad], 1);
+  assert.equal(lb[0].submittedCount, 0);
 });
