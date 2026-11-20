@@ -9,14 +9,21 @@ import {
 } from 'lucide-react';
 import { SiteHeader } from '../components/SiteHeader';
 import { SiteFooter } from '../components/SiteFooter';
-import { StarRatingInput } from '../components/StarRatingInput';
+import { CriteriaScoreInput } from '../components/CriteriaScoreInput';
 import { useArenaAuth } from '../context/ArenaAuthContext';
 import {
-  submitOverallRating,
+  submitCriteriaScores,
   subscribeMyEvaluations,
 } from '../services/arenaService';
-import type { Evaluation } from '../types/arena';
-import { STAR_LABELS, isValidStarRating } from '../utils/scoring';
+import type { CriteriaScores, Evaluation } from '../types/arena';
+import {
+  MAX_CRITERION_SCORE,
+  MAX_TOTAL_SCORE,
+  MIN_CRITERION_SCORE,
+  isScoredEvaluation,
+  isValidCriteriaScores,
+  sumCriteria,
+} from '../utils/scoring';
 
 export function JudgeEvaluatePage() {
   const { teamId } = useParams<{ teamId: string }>();
@@ -25,7 +32,7 @@ export function JudgeEvaluatePage() {
 
   const [evaluations, setEvaluations] = useState<Evaluation[]>([]);
   const [evalsLoaded, setEvalsLoaded] = useState(false);
-  const [rating, setRating] = useState<number>(0);
+  const [scores, setScores] = useState<Partial<CriteriaScores>>({});
   const [comment, setComment] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
@@ -50,7 +57,7 @@ export function JudgeEvaluatePage() {
 
   useEffect(() => {
     if (existingEval) {
-      setRating(existingEval.rating);
+      setScores(existingEval.criteria ?? {});
       setComment(existingEval.comment || '');
     }
   }, [existingEval]);
@@ -93,6 +100,8 @@ export function JudgeEvaluatePage() {
     );
   }
 
+  const isLegacyExisting = Boolean(existingEval) && !isScoredEvaluation(existingEval as Evaluation);
+  const scoresComplete = isValidCriteriaScores(scores);
   const isLockedExisting = Boolean(existingEval) && !settings?.editingAllowed;
   const submissionsClosed = settings?.submissionsOpen === false;
   const readOnly = isLockedExisting || submissionsClosed || submittedSuccess;
@@ -112,18 +121,24 @@ export function JudgeEvaluatePage() {
       );
       return;
     }
-    if (!isValidStarRating(rating)) {
-      setError('Please select one overall star rating between 1 and 5.');
+    if (isLegacyExisting) {
+      setError(
+        'This team already has an old single-score rating that an admin must clear before it can be re-scored.',
+      );
+      return;
+    }
+    if (!isValidCriteriaScores(scores)) {
+      setError('Please score all five criteria.');
       return;
     }
 
     setBusy(true);
     try {
-      await submitOverallRating({
+      await submitCriteriaScores({
         judgeId: judgeProfile.id,
         judgeUid: user.uid,
         teamId: team.id,
-        rating,
+        criteria: scores,
         comment,
         isEdit: Boolean(existingEval),
       });
@@ -186,7 +201,7 @@ export function JudgeEvaluatePage() {
               <div className="text-sm">
                 <div className="font-bold">Rating Submitted Successfully</div>
                 <p className="text-slate-200 mt-0.5">
-                  Your {rating}/5 rating for {team.name} has been recorded.
+                  Your scores for {team.name} have been recorded{scoresComplete ? ` (${sumCriteria(scores)}/${MAX_TOTAL_SCORE})` : ''}.
                   Returning to Team Selection Dashboard...
                 </p>
               </div>
@@ -211,7 +226,7 @@ export function JudgeEvaluatePage() {
                   Evaluation Already Submitted
                 </div>
                 <p className="text-xs text-slate-400 mt-0.5">
-                  Each judge may submit one overall rating per team. Editing is
+                  Each judge may submit one set of five scores per team. Editing is
                   currently disabled by the administrator.
                 </p>
               </div>
@@ -228,17 +243,24 @@ export function JudgeEvaluatePage() {
           <form onSubmit={(e) => void handleSubmit(e)} className="space-y-6">
             <div>
               <h2 className="text-lg font-display font-bold text-white mb-1">
-                Rate This Team&apos;s Overall Presentation
+                Score This Team on Five Criteria
               </h2>
               <p className="text-xs text-slate-400 mb-4">
-                Consider innovation, technical execution, demonstration quality,
-                and presentation clarity to choose one overall score.
+                Give each criterion a score from {MIN_CRITERION_SCORE} to{' '}
+                {MAX_CRITERION_SCORE}. The total out of {MAX_TOTAL_SCORE} is
+                calculated for you.
               </p>
+              {isLegacyExisting && (
+                <p className="text-xs text-amber-300 mb-3">
+                  Your earlier single {existingEval?.rating}/5 rating for this
+                  team uses the old scale and cannot be edited here.
+                </p>
+              )}
 
-              <StarRatingInput
-                value={rating}
-                onChange={(val) => setRating(val)}
-                disabled={readOnly || !evalsLoaded}
+              <CriteriaScoreInput
+                value={scores}
+                onChange={(id, v) => setScores((prev) => ({ ...prev, [id]: v }))}
+                disabled={readOnly || isLegacyExisting || !evalsLoaded}
               />
             </div>
 
@@ -265,7 +287,7 @@ export function JudgeEvaluatePage() {
             </div>
 
             {/* Review Before Submission */}
-            {rating > 0 && !submittedSuccess && (
+            {scoresComplete && !submittedSuccess && (
               <div className="p-4 rounded-lg bg-[#081422] space-y-1.5 text-sm">
                 <div className="text-xs font-semibold text-[#F5B942]">
                   Submission Review
@@ -275,9 +297,9 @@ export function JudgeEvaluatePage() {
                   <strong className="text-white">{team.name}</strong>
                 </div>
                 <div className="flex items-center justify-between">
-                  <span className="text-slate-400">Overall Rating</span>
+                  <span className="text-slate-400">Total score</span>
                   <strong className="font-mono-tabular text-[#F5B942]">
-                    {rating} / 5 ({STAR_LABELS[rating as 1 | 2 | 3 | 4 | 5]})
+                    {sumCriteria(scores as CriteriaScores)} / {MAX_TOTAL_SCORE}
                   </strong>
                 </div>
               </div>
@@ -286,7 +308,7 @@ export function JudgeEvaluatePage() {
             {!readOnly && (
               <button
                 type="submit"
-                disabled={busy || !isValidStarRating(rating) || !evalsLoaded}
+                disabled={busy || !scoresComplete || isLegacyExisting || !evalsLoaded}
                 className="w-full min-h-[48px] inline-flex items-center justify-center gap-2 px-5 py-3 rounded-lg bg-[#2563EB] hover:bg-[#1d4ed8] text-white text-sm font-semibold transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 <Send className="w-4 h-4" />
