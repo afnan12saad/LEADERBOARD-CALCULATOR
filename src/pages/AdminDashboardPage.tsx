@@ -232,7 +232,7 @@ export function AdminDashboardPage() {
                 Incoming Administrator Join Request ({pendingRequests.length})
               </div>
               <span className="text-xs text-amber-300 font-semibold">
-                First Admin Verification & Approval Required
+                Approval Required
               </span>
             </div>
             {adminLimitReached && (
@@ -251,12 +251,6 @@ export function AdminDashboardPage() {
                       {req.name}{' '}
                       <span className="text-xs font-normal text-amber-200">
                         ({req.email})
-                      </span>
-                    </div>
-                    <div className="text-xs text-amber-300/90 mt-0.5 flex items-center gap-2">
-                      <span>Verification Code:</span>
-                      <span className="font-mono-tabular font-bold text-white bg-black/40 px-2 py-0.5 rounded border border-amber-500/30 text-xs tracking-wider">
-                        {req.verificationCode}
                       </span>
                     </div>
                   </div>
