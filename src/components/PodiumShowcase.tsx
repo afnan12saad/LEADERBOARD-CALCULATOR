@@ -1,5 +1,6 @@
-import { Crown, Star } from 'lucide-react';
-import { MotionConfig, motion } from 'motion/react';
+import { useEffect, useRef, useState } from 'react';
+import { ArrowUp, Crown, Star } from 'lucide-react';
+import { MotionConfig, animate, motion, useReducedMotion } from 'motion/react';
 import type { LeaderboardEntry, Team } from '../types/arena';
 import { TrophyEmblem } from './TrophyEmblem';
 
@@ -8,6 +9,68 @@ interface PodiumShowcaseProps {
   teams?: Team[];
   showProjectTitle?: boolean;
   subtitle?: string;
+}
+
+/** Counts a score from its previous value to the new one. Shows the final value at once if motion is reduced. */
+function CountUp({ value, suffix = '' }: { value: number; suffix?: string }) {
+  const reduce = useReducedMotion();
+  const [shown, setShown] = useState(value);
+  const from = useRef(value);
+  useEffect(() => {
+    if (reduce || from.current === value) {
+      from.current = value;
+      setShown(value);
+      return;
+    }
+    const controls = animate(from.current, value, {
+      duration: 1.2,
+      ease: 'easeOut',
+      onUpdate: (v) => setShown(v),
+      onComplete: () => {
+        from.current = value;
+        setShown(value);
+      },
+    });
+    return () => {
+      from.current = shown;
+      controls.stop();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [value, reduce]);
+  return (
+    <span>
+      {shown.toFixed(2)}
+      {suffix}
+    </span>
+  );
+}
+
+/** Teams whose rank improved since the previous update, kept for a few seconds so they can glow. */
+function useRisers(entries: LeaderboardEntry[]): Map<string, number> {
+  const prev = useRef<Map<string, number> | null>(null);
+  const [risers, setRisers] = useState<Map<string, number>>(new Map());
+  const key = entries
+    .map((e) => `${e.teamId}:${e.submittedCount > 0 ? e.rank : 0}`)
+    .join('|');
+  useEffect(() => {
+    const now = new Map(
+      entries.map((e) => [e.teamId, e.submittedCount > 0 ? e.rank : 0]),
+    );
+    const before = prev.current;
+    prev.current = now;
+    if (!before) return;
+    const up = new Map<string, number>();
+    now.forEach((rank, id) => {
+      const old = before.get(id);
+      if (rank > 0 && old !== undefined && old > 0 && rank < old) up.set(id, old - rank);
+    });
+    if (up.size === 0) return;
+    setRisers(up);
+    const t = setTimeout(() => setRisers(new Map()), 4500);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [key]);
+  return risers;
 }
 
 function formatOrdinal(rank: number): string {
@@ -31,6 +94,7 @@ export function PodiumShowcase({
   showProjectTitle = true,
   subtitle = 'Teams ranked 1st and 2nd (ties share a rank) are highlighted by their live average rating out of 5.',
 }: PodiumShowcaseProps) {
+  const risers = useRisers(entries);
   if (entries.length === 0) {
     return null;
   }
@@ -90,15 +154,49 @@ export function PodiumShowcase({
             const displayRank = item.submittedCount > 0 ? item.rank : index + 1;
 
             return (
-              <div
+              <motion.div
                 key={item.teamId}
-                className="flex flex-col items-center transition-all duration-700 ease-out animate-reveal"
-                style={{
-                  paddingBottom: `${liftPx}px`,
-                  animationDelay: `${index * 120}ms`,
-                  animationFillMode: 'both',
+                layout="position"
+                initial={{ opacity: 0, y: 90, scale: 0.8 }}
+                animate={{ opacity: 1, y: 0, scale: 1 }}
+                transition={{
+                  type: 'spring',
+                  stiffness: 140,
+                  damping: 16,
+                  delay: index * 0.12,
                 }}
+                className="flex flex-col items-center relative"
+                style={{ paddingBottom: `${liftPx}px` }}
               >
+                {risers.has(item.teamId) && (
+                  <motion.div
+                    aria-hidden="true"
+                    className="absolute inset-x-2 top-2 bottom-0 rounded-2xl pointer-events-none"
+                    initial={{ opacity: 0 }}
+                    animate={{
+                      opacity: [0, 0.9, 0.35, 0.9, 0],
+                      boxShadow: [
+                        '0 0 0px rgba(245,185,66,0)',
+                        '0 0 60px rgba(245,185,66,0.75)',
+                        '0 0 30px rgba(245,185,66,0.35)',
+                        '0 0 60px rgba(245,185,66,0.75)',
+                        '0 0 0px rgba(245,185,66,0)',
+                      ],
+                    }}
+                    transition={{ duration: 4, ease: 'easeInOut' }}
+                  />
+                )}
+                {risers.has(item.teamId) && (
+                  <motion.div
+                    className="mb-1 inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-[#F5B942] text-[#071422] text-xs font-bold shadow-lg"
+                    initial={{ opacity: 0, y: 10, scale: 0.7 }}
+                    animate={{ opacity: 1, y: 0, scale: 1 }}
+                    transition={{ type: 'spring', stiffness: 300, damping: 18, delay: 0.3 }}
+                  >
+                    <ArrowUp className="w-3.5 h-3.5" />
+                    Moving up
+                  </motion.div>
+                )}
                 {/* Vertical Spotlight Cone */}
                 <div
                   className="w-full max-w-[300px] pt-5 pb-3 px-4 flex flex-col items-center text-center rounded-t-2xl"
@@ -190,16 +288,18 @@ export function PodiumShowcase({
                       }`}
                     />
                     <span>
-                      {item.submittedCount > 0
-                        ? `${item.averageFormatted} / 5`
-                        : 'Pending'}
+                      {item.submittedCount > 0 ? (
+                        <CountUp value={Number(item.averageFormatted)} suffix=" / 5" />
+                      ) : (
+                        'Pending'
+                      )}
                     </span>
                   </div>
                   <div className="text-[11px] font-mono-tabular text-slate-200/85 mt-0.5">
                     {item.submittedCount} / {item.totalJudges} ratings submitted
                   </div>
                 </div>
-              </div>
+              </motion.div>
             );
           })}
         </div>
@@ -245,6 +345,11 @@ export function PodiumShowcase({
                   initial={{ opacity: 0, y: 8 }}
                   animate={{ opacity: 1, y: 0 }}
                   transition={{ type: 'spring', stiffness: 260, damping: 28 }}
+                  style={
+                    risers.has(entry.teamId)
+                      ? { boxShadow: '0 0 0 1px rgba(245,185,66,0.8), 0 0 24px rgba(245,185,66,0.35)' }
+                      : undefined
+                  }
                   className="rounded-xl bg-[#0D1A2B] border border-[#1B314E] px-4 sm:px-5 py-3.5 flex items-center justify-between gap-4 hover:bg-[#102238] transition-colors"
                 >
                   <div className="flex items-center gap-4 min-w-0 flex-1">
@@ -305,9 +410,11 @@ export function PodiumShowcase({
                     </span>
 
                     <div className="w-24 text-right font-mono-tabular text-sm sm:text-base font-bold text-[#10B981]">
-                      {entry.submittedCount > 0
-                        ? `${entry.averageFormatted} / 5`
-                        : '-'}
+                      {entry.submittedCount > 0 ? (
+                        <CountUp value={Number(entry.averageFormatted)} suffix=" / 5" />
+                      ) : (
+                        '-'
+                      )}
                     </div>
                   </div>
                 </motion.div>
