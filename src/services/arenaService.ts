@@ -627,11 +627,6 @@ export async function registerJudgeByNameEmail(
     }
   }
 
-  const summarySnap = await getDoc(doc(db, 'publicStats', 'summary'));
-  const currentTotalJudges = summarySnap.exists()
-    ? Number((summarySnap.data() as PublicSummary).totalJudges || 0)
-    : 0;
-
   const judgeId = generateJudgeIdFromUid(user.uid);
   const batch = writeBatch(db);
   batch.set(doc(db, 'judges', judgeId), {
@@ -651,10 +646,18 @@ export async function registerJudgeByNameEmail(
     accessCode: 'SELF_AUTH',
     createdAt: serverTimestamp(),
   });
-  batch.set(doc(db, 'publicStats', 'summary'), {
-    totalJudges: Math.max(0, currentTotalJudges) + 1,
-    updatedAt: serverTimestamp(),
-  });
+  // Server-side increment with merge: no stale read, so simultaneous sign-ups
+  // all satisfy the rule `totalJudges == existing + 1` (first write creates 1).
+  // `merge: true` is required: a plain set() with increment() is rejected by
+  // the rules (verified in the Firestore emulator).
+  batch.set(
+    doc(db, 'publicStats', 'summary'),
+    {
+      totalJudges: increment(1),
+      updatedAt: serverTimestamp(),
+    },
+    { merge: true },
+  );
 
   try {
     await batch.commit();
@@ -821,7 +824,8 @@ export async function saveEventSettings(
       submissionsOpen: Boolean(settings.submissionsOpen),
       editingAllowed: Boolean(settings.editingAllowed),
       resultsPublished: Boolean(settings.resultsPublished),
-      tieBreakerMode: settings.tieBreakerMode,
+      // Always 'tie': normalizes any legacy 'admin_order' value on save.
+      tieBreakerMode: 'tie',
       currentTeamId: settings.currentTeamId.slice(0, 128),
       timerDurationSeconds: Math.min(
         MAX_WHOLE_EVENT_TIMER_SECONDS,
