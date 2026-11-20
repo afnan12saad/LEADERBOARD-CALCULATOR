@@ -34,6 +34,8 @@ import {
   subscribeAllAdmins,
   subscribeAllEvaluations,
   subscribeAllJudges,
+  getAdminSlotUsage,
+  type AdminSlotUsage,
 } from '../services/arenaService';
 import type {
   AdminUser,
@@ -78,6 +80,14 @@ export function AdminDashboardPage() {
   const [evaluations, setEvaluations] = useState<Evaluation[]>([]);
   const [toast, setToast] = useState('');
   const zeroInitAttempted = useRef(false);
+  const [slotUsage, setSlotUsage] = useState<AdminSlotUsage | null>(null);
+  useEffect(() => {
+    if (!isAdmin) return;
+    void getAdminSlotUsage().then(setSlotUsage).catch(() => setSlotUsage(null));
+  }, [isAdmin, admins.length]);
+  const adminLimitReached =
+    admins.length >= 5 ||
+    (slotUsage !== null && (!slotUsage.reconciled || slotUsage.free.length === 0));
 
   const pendingRequests = useMemo(
     () => adminRequests.filter((r) => r.status === 'pending'),
@@ -225,6 +235,11 @@ export function AdminDashboardPage() {
                 First Admin Verification & Approval Required
               </span>
             </div>
+            {adminLimitReached && (
+              <p className="text-xs text-amber-200">
+                {admins.length} of 5 admin accounts. Adding another admin is not possible right now. Remove an admin, or see Event Settings for details.
+              </p>
+            )}
             <div className="divide-y divide-amber-900/40 space-y-2">
               {pendingRequests.map((req) => (
                 <div
@@ -252,11 +267,16 @@ export function AdminDashboardPage() {
                         try {
                           await approveRequest(req);
                           showToast(`Approved ${req.name} as Administrator.`);
-                        } catch {
-                          showToast('Unable to approve admin request.');
+                        } catch (err) {
+                          showToast(
+                            err instanceof Error && /maximum of 5/i.test(err.message)
+                              ? err.message
+                              : 'Unable to approve admin request.',
+                          );
                         }
                       }}
-                      className="min-h-[44px] px-4 py-2 rounded-lg bg-[#16A34A] hover:bg-[#15803D] text-white text-xs font-semibold transition-colors flex items-center gap-1.5"
+                      disabled={adminLimitReached}
+                      className="min-h-[44px] px-4 py-2 rounded-lg bg-[#16A34A] hover:bg-[#15803D] text-white text-xs font-semibold transition-colors flex items-center gap-1.5 disabled:opacity-50 disabled:cursor-not-allowed"
                     >
                       <CheckCircle2 className="w-3.5 h-3.5" />
                       Accept & Add Admin
