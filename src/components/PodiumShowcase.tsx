@@ -28,15 +28,20 @@ export function PodiumShowcase({
   entries,
   teams = [],
   showProjectTitle = true,
-  subtitle = 'Top 2 winning teams stand highlighted by their live average rating out of 5.',
+  subtitle = 'Teams ranked 1st and 2nd (ties share a rank) are highlighted by their live average rating out of 5.',
 }: PodiumShowcaseProps) {
   if (entries.length === 0) {
     return null;
   }
 
   const teamLogoMap = new Map(teams.map((t) => [t.id, t.logoUrl]));
-  const topTwo = entries.slice(0, 2);
-  const rest = entries.slice(2);
+  // Podium = every team ranked 1st or 2nd. Teams tied for a podium rank all
+  // stand on the podium, so a tie never favours one team. With no ratings yet,
+  // fall back to the first two entries.
+  const ranked = entries.filter((e) => e.submittedCount > 0 && e.rank <= 2);
+  const topTwo = ranked.length > 0 ? ranked : entries.slice(0, 2);
+  const topIds = new Set(topTwo.map((e) => e.teamId));
+  const rest = entries.filter((e) => !topIds.has(e.teamId));
 
   // Compute dynamic vertical elevation directly from each team's average rating
   // Higher-rated teams rise noticeably higher; tied teams stand at the exact same level.
@@ -52,7 +57,7 @@ export function PodiumShowcase({
   const getSpotLiftPx = (entry: LeaderboardEntry, index: number): number => {
     if (entry.submittedCount === 0) return 0;
     const baseByScore = (entry.averageRating / 5) * 44;
-    if (topTwo.length === 2 && topTwo[0].rank === topTwo[1].rank) {
+    if (topTwo.length >= 2 && topTwo.every((e) => e.rank === topTwo[0].rank)) {
       return Math.round(baseByScore + 18);
     }
     const gapBoost =
@@ -69,7 +74,13 @@ export function PodiumShowcase({
     <div className="space-y-10">
       {/* Top 2 Spotlight Stage (inspired by leader_1ae5b02a.webp) */}
       <section aria-label="Top Two Winning Teams" className="pt-2">
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-6 sm:gap-10 max-w-3xl mx-auto items-end">
+        <div
+          className={`grid grid-cols-1 gap-6 sm:gap-10 mx-auto items-end ${
+            topTwo.length >= 3
+              ? 'md:grid-cols-3 max-w-5xl'
+              : 'md:grid-cols-2 max-w-3xl'
+          }`}
+        >
           {topTwo.map((item, index) => {
             const isGold = index === 0 || item.rank === 1;
             const logoUrl = teamLogoMap.get(item.teamId);
