@@ -6,7 +6,9 @@ let pass=0,fail=0; const ok=(n,c)=>{console.log(c?'PASS':'FAIL',n);c?pass++:fail
 await env.clearFirestore();
 await env.withSecurityRulesDisabled(async c=>{const d=c.firestore();
  await setDoc(doc(d,'publicStats','adminQuota'),{count:1,firstAdminEmail:'afnan12saad@gmail.com',firstAdminUid:'first',updatedAt:Timestamp.now()});
- await setDoc(doc(d,'admins','first'),{uid:'first',email:'afnan12saad@gmail.com',name:'F',createdAt:Timestamp.now(),isFirstAdmin:true});
+ await setDoc(doc(d,'admins','first'),{uid:'first',email:'afnan12saad@gmail.com',name:'F',createdAt:Timestamp.now(),isFirstAdmin:true,slot:'s1'});
+ await setDoc(doc(d,'adminSlots','s1'),{uid:'first',createdAt:Timestamp.now()});
+ await setDoc(doc(d,'adminSlots','reconciled'),{at:Timestamp.now()});
  await setDoc(doc(d,'settings','event'),{resultsPublished:false});
  await setDoc(doc(d,'publicResults','leaderboard'),{published:true,totalJudges:1,totalTeams:1,totalSubmissions:1,entries:[],updatedAt:Timestamp.now()});});
 const att=env.authenticatedContext('evil',{email:'evil@x.com',email_verified:true,firebase:{sign_in_provider:'password'}}).firestore();
@@ -23,7 +25,8 @@ const adm=env.authenticatedContext('first',{email:'afnan12saad@gmail.com',email_
 await env.withSecurityRulesDisabled(async c=>{ await setDoc(doc(c.firestore(),'adminRequests','good'),{...reqData,id:'good',uid:'good',email:'good@x.com',name:'Good',requestedAt:Timestamp.now(),updatedAt:Timestamp.now()}); });
 const ab=writeBatch(adm);
 ab.update(doc(adm,'adminRequests','good'),{status:'approved',approvedAt:serverTimestamp(),approvedBy:'afnan12saad@gmail.com',updatedAt:serverTimestamp()});
-ab.set(doc(adm,'admins','good'),{uid:'good',email:'good@x.com',name:'Good',isFirstAdmin:false,createdAt:serverTimestamp()});
+ab.set(doc(adm,'admins','good'),{uid:'good',email:'good@x.com',name:'Good',isFirstAdmin:false,slot:'s2',createdAt:serverTimestamp()});
+ab.set(doc(adm,'adminSlots','s2'),{uid:'good',createdAt:serverTimestamp()});
 ab.set(doc(adm,'publicStats','adminQuota'),{count:increment(1),updatedAt:serverTimestamp()},{merge:true});
 await assertSucceeds(ab.commit()).then(()=>ok('existing admin can approve a request (no lockout)',true)).catch(e=>ok('existing admin can approve a request :: '+e.message.slice(0,90),false));
 const good=env.authenticatedContext('good',{email:'good@x.com',email_verified:true,firebase:{sign_in_provider:'password'}}).firestore();
@@ -35,7 +38,9 @@ await assertFails(setDoc(doc(unv,'adminRequests','unv'),{...reqData,id:'unv',uid
 await env.clearFirestore();
 const boot=env.authenticatedContext('b1',{email:'afnan12saad@gmail.com',email_verified:true,firebase:{sign_in_provider:'password'}}).firestore();
 const bb=writeBatch(boot);
-bb.set(doc(boot,'admins','b1'),{uid:'b1',email:'afnan12saad@gmail.com',name:'F',isFirstAdmin:true,createdAt:serverTimestamp()});
+bb.set(doc(boot,'admins','b1'),{uid:'b1',email:'afnan12saad@gmail.com',name:'F',isFirstAdmin:true,slot:'s1',createdAt:serverTimestamp()});
+bb.set(doc(boot,'adminSlots','s1'),{uid:'b1',createdAt:serverTimestamp()});
+bb.set(doc(boot,'adminSlots','reconciled'),{at:serverTimestamp()});
 bb.set(doc(boot,'publicStats','adminQuota'),{count:1,firstAdminEmail:'afnan12saad@gmail.com',firstAdminUid:'b1',updatedAt:serverTimestamp()},{merge:true});
 await assertSucceeds(bb.commit()).then(()=>ok('first-admin bootstrap on a fresh project still works',true)).catch(e=>ok('first-admin bootstrap :: '+e.message.slice(0,90),false));
 console.log(`${pass} passed, ${fail} failed`); await env.cleanup(); process.exit(fail?1:0);
