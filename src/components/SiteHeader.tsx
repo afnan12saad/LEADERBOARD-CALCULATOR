@@ -6,11 +6,10 @@ import { useArenaAuth } from '../context/ArenaAuthContext';
 
 export function SiteHeader() {
   const location = useLocation();
-  const { isAdmin, judgeProfile, settings } = useArenaAuth();
+  const { isAdmin, judgeProfile } = useArenaAuth();
   const [mobileOpen, setMobileOpen] = useState(false);
 
-  const resultsReleased = Boolean(settings?.resultsPublished);
-  const canSeeLeaderboardLinks = isAdmin || resultsReleased;
+  const canSeeLeaderboardLinks = isAdmin;
 
   const navItems = [
     { label: 'Home', to: '/' },
