@@ -8,30 +8,17 @@ import { PodiumShowcase } from '../components/PodiumShowcase';
 import { useArenaAuth } from '../context/ArenaAuthContext';
 import {
   DEFAULT_EVENT_SETTINGS,
-  publishOrHideResults,
   subscribeAllEvaluations,
   subscribeAllJudges,
-  subscribePublishedLeaderboard,
 } from '../services/arenaService';
-import type { Evaluation, Judge, PublishedLeaderboard } from '../types/arena';
+import type { Evaluation, Judge } from '../types/arena';
 import { calculateLeaderboard } from '../utils/scoring';
 
 export function FinalResultsPage() {
   const { settings, teams, isAdmin, judgeProfile, publicSummary } =
     useArenaAuth();
-  const [board, setBoard] = useState<PublishedLeaderboard | null>(null);
   const [adminJudges, setAdminJudges] = useState<Judge[]>([]);
   const [adminEvaluations, setAdminEvaluations] = useState<Evaluation[]>([]);
-  const [releaseBusy, setReleaseBusy] = useState(false);
-
-  const resultsPublished = Boolean(settings?.resultsPublished);
-
-  useEffect(() => {
-    return subscribePublishedLeaderboard(
-      (data) => setBoard(data),
-      resultsPublished || isAdmin,
-    );
-  }, [resultsPublished, isAdmin]);
 
   useEffect(() => {
     if (!isAdmin) {
@@ -65,25 +52,6 @@ export function FinalResultsPage() {
     settings?.tieBreakerMode,
   ]);
 
-  const handleReleaseResults = async () => {
-    if (!isAdmin) return;
-    setReleaseBusy(true);
-    try {
-      await publishOrHideResults({
-        publish: true,
-        teams,
-        judges: adminJudges,
-        evaluations: adminEvaluations,
-        settings: settings ?? { ...DEFAULT_EVENT_SETTINGS },
-      });
-    } finally {
-      setReleaseBusy(false);
-    }
-  };
-
-  const isRevealed =
-    resultsPublished && board && board.published && board.entries.length > 0;
-
   const eventName = settings?.eventName || DEFAULT_EVENT_SETTINGS.eventName;
   const collegeName =
     settings?.collegeName || DEFAULT_EVENT_SETTINGS.collegeName;
@@ -112,25 +80,7 @@ export function FinalResultsPage() {
           />
         </div>
 
-        {isRevealed ? (
-          <div className="space-y-8 animate-reveal">
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-[#183152] pb-4">
-              <h2 className="text-lg font-display font-bold text-white">
-                Top 2 Winners & Final Standings
-              </h2>
-              <span className="text-xs text-slate-400 font-mono-tabular">
-                {board.totalSubmissions} Total Ratings Across {board.totalTeams}{' '}
-                Teams
-              </span>
-            </div>
-
-            <PodiumShowcase
-              entries={board.entries}
-              teams={teams}
-              showProjectTitle
-            />
-          </div>
-        ) : isAdmin ? (
+        {isAdmin ? (
           <div className="space-y-8 animate-reveal">
             <div className="p-5 rounded-xl bg-[#0D1E33] border border-[#F5B942]/60 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
               <div className="flex items-start gap-3">
@@ -139,24 +89,14 @@ export function FinalResultsPage() {
                 </div>
                 <div>
                   <h2 className="text-base font-display font-bold text-white">
-                    Admin-Only Standings Preview
+                    Live Standings (Admin Only)
                   </h2>
                   <p className="text-xs text-slate-300 mt-0.5 leading-relaxed">
-                    Judges and participants cannot see these standings yet.
-                    Release final results when judging finishes to reveal the
-                    Top 2 spotlight podium.
+                    Only signed-in admins can see these standings. Judges and
+                    other users cannot open them.
                   </p>
                 </div>
               </div>
-              <button
-                type="button"
-                disabled={releaseBusy}
-                onClick={() => void handleReleaseResults()}
-                className="min-h-[44px] inline-flex items-center justify-center gap-2 px-5 py-2.5 rounded-lg bg-[#16A34A] text-white text-sm font-semibold hover:bg-[#15803d] transition-colors shrink-0 disabled:opacity-60"
-              >
-                <Eye className="w-4 h-4" />
-                {releaseBusy ? 'Releasing...' : 'Release Final Results'}
-              </button>
             </div>
 
             {adminLiveEntries.length > 0 ? (
@@ -177,13 +117,11 @@ export function FinalResultsPage() {
               <Lock className="w-6 h-6" />
             </div>
             <h2 className="text-xl font-display font-bold text-white">
-              Final Results Are Locked Until Admin Release
+              Leaderboard Is Admin Only
             </h2>
             <p className="text-sm text-slate-300 leading-relaxed">
-              Leaderboard rankings and scores are restricted exclusively to
-              event administrators during judging. Once the Event Admin releases
-              the final results at the end, the Top 2 winners and standings will
-              appear here for everyone.
+              Leaderboard rankings and scores are visible only to signed-in
+              event administrators.
             </p>
             <div className="pt-2 flex flex-wrap justify-center gap-3">
               {judgeProfile && (
