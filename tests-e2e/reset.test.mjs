@@ -91,6 +91,24 @@ await seed(5,15);
 const pA=archiveAndStartNewEvent(settings,'a@x.com'); await new Promise(r=>setTimeout(r,150)); const pB=archiveAndStartNewEvent(settings,'b@x.com'); const rr=await Promise.allSettled([pA,pB])
 ok('second reset started while the first is running is refused', rr.filter(r=>r.status==='fulfilled').length===1);
 ok('and exactly one archive exists', await cnt(adm,'eventArchives')===1);
+// 11. judge registration is blocked while a reset marker exists, allowed otherwise
+await seed(1,3);
+const reg=(uid)=>{const db=env.authenticatedContext(uid).firestore(); const id='J_'+uid.toUpperCase(); const b=writeBatch(db);
+  b.set(doc(db,'judges',id),{id,judgeCode:id,name:'N',department:'',email:uid+'@x.com',uid,active:true,createdAt:serverTimestamp(),updatedAt:serverTimestamp()});
+  b.set(doc(db,'judgeSessions',uid),{uid,judgeId:id,accessCode:'SELF_AUTH',createdAt:serverTimestamp()});
+  b.set(doc(db,'publicStats','summary'),{totalJudges:increment(1),updatedAt:serverTimestamp()},{merge:true}); return b.commit();};
+let r1=true; try{await reg('nj1');}catch{r1=false}
+ok('judge can register when no reset is running', r1);
+await env.withSecurityRulesDisabled(async c=>setDoc(doc(c.firestore(),'eventResets','current'),{status:'deleting',archiveId:'x',expectedRatingCount:0,startedBy:'a',owner:'o',updatedAtMs:Date.now()}));
+let r2=false; try{await reg('nj2');}catch{r2=true}
+ok('judge registration blocked while a reset is running', r2);
+// 12. takeover: the original run stops before its next delete once its marker owner changed
+await seed(300,15); setDb(adm);
+const run=archiveAndStartNewEvent(settings,'a@x.com').then(()=>'done',e=>e.message);
+for(let k=0;k<400;k++){ const n=await cnt(adm,'evaluations'); if(n<4500&&n>0) break; await new Promise(r=>setTimeout(r,25)); }
+await env.withSecurityRulesDisabled(async c=>updateDoc(doc(c.firestore(),'eventResets','current'),{owner:'someone-else'}));
+const outcome=await run; const left=await cnt(adm,'evaluations');
+ok('original run stops after another session takes over ('+outcome.slice(0,40)+', '+left+' ratings left)', /taken over/.test(outcome)&&left>0);
 // 10. non-admin cannot touch the marker
 const nb=env.authenticatedContext('u1').firestore(); let nd=false; try{await getDoc(doc(nb,'eventResets','current'));}catch{nd=true}
 ok('non-admin cannot read reset marker', nd);
