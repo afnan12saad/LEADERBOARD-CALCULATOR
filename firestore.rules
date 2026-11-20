@@ -467,6 +467,11 @@ service cloud.firestore {
       allow delete: if isValidId(resultId) && resultId == 'leaderboard' && isAdmin();
     }
 
+    // 12. Reset-in-progress marker. Admin only. Exists only while a "Start New Event" is running or unfinished.
+    match /eventResets/{resetId} {
+      allow get, list, create, update, delete: if resetId == 'current' && isAdmin();
+    }
+
     // 11. Event Archives (results of finished events, saved before a reset). Admin-only, write-once.
     match /eventArchives/{archiveId} {
       allow get, list: if isAdmin();
