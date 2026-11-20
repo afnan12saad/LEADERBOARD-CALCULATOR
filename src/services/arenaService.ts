@@ -318,53 +318,6 @@ export async function rejectAdminJoinRequest(requestUid: string): Promise<void> 
   }
 }
 
-export async function verifyAdminCodeAndActivate(
-  user: User,
-  enteredCode: string,
-): Promise<boolean> {
-  const reqSnap = await getDoc(doc(db, 'adminRequests', user.uid));
-  if (!reqSnap.exists()) {
-    throw new Error('No pending administrator request found for your account.');
-  }
-  const req = reqSnap.data() as AdminRequest;
-  const cleanCode = enteredCode.trim().replace(/\s+/g, '');
-  if (req.verificationCode.trim() !== cleanCode) {
-    throw new Error(
-      'Invalid verification code. Please check the 6-digit code sent to the primary administrator.',
-    );
-  }
-
-  const batch = writeBatch(db);
-  batch.update(doc(db, 'adminRequests', user.uid), {
-    status: 'approved',
-    approvedAt: serverTimestamp(),
-    approvedBy: 'Verification Code Verification',
-    updatedAt: serverTimestamp(),
-  });
-  batch.set(doc(db, 'admins', user.uid), {
-    uid: user.uid,
-    email: req.email,
-    name: req.name,
-    isFirstAdmin: false,
-    createdAt: serverTimestamp(),
-  });
-  batch.set(
-    doc(db, 'publicStats', 'adminQuota'),
-    {
-      count: increment(1),
-      updatedAt: serverTimestamp(),
-    },
-    { merge: true },
-  );
-
-  try {
-    await batch.commit();
-    return true;
-  } catch (err) {
-    handleFirestoreError(err, OperationType.WRITE, `admins/${user.uid}`);
-  }
-}
-
 export async function claimAdminSlot(
   user: User,
   preferredName?: string,
