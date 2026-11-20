@@ -77,7 +77,7 @@ test('calculateLeaderboard computes exact average from submitted ratings only (2
   assert.equal(board[0].ratingSum, 23);
   assert.equal(board[0].submittedCount, 5);
   assert.equal(board[0].totalJudges, 15);
-  assert.equal(board[0].averageFormatted, '4.6');
+  assert.equal(board[0].averageFormatted, '4.60');
   assert.equal(board[0].rank, 1);
 });
 
@@ -96,10 +96,10 @@ test('calculateLeaderboard ignores pending submissions (12/15 submitted never co
 
   const board = calculateLeaderboard(teams, evals, 15, 'tie');
   assert.equal(board[0].teamId, 'team-alpha');
-  assert.equal(board[0].averageFormatted, '4.0');
+  assert.equal(board[0].averageFormatted, '4.00');
   assert.equal(board[0].submittedCount, 12);
   assert.equal(board[1].teamId, 'team-beta');
-  assert.equal(board[1].averageFormatted, '3.0');
+  assert.equal(board[1].averageFormatted, '3.00');
   assert.equal(board[1].submittedCount, 15);
 });
 
@@ -127,11 +127,12 @@ test('calculateLeaderboard handles ties and admin tie-breaker modes accurately',
   assert.equal(tiedBoard[3].submittedCount, 0);
 
   const brokenBoard = calculateLeaderboard(teams, evals, 15, 'admin_order');
-  assert.equal(brokenBoard[0].teamId, 'team-b');
-  assert.equal(brokenBoard[0].rank, 1);
-  assert.equal(brokenBoard[0].isTied, false);
-  assert.equal(brokenBoard[1].teamId, 'team-a');
-  assert.equal(brokenBoard[1].rank, 2);
+  // A legacy stored 'admin_order' setting must NOT defeat the approved rule:
+  // equal rounded averages still share rank 1 and the next team is rank 3.
+  assert.deepEqual(
+    brokenBoard.map((e) => [e.rank, e.isTied]),
+    tiedBoard.map((e) => [e.rank, e.isTied]),
+  );
 });
 
 test('calculateDashboardMetrics computes dynamic judges, teams, submitted, pending, and %', () => {
@@ -312,3 +313,42 @@ test('whole-event timer H:M:S helpers and judge Name+Email validation', async ()
 });
 
 
+
+test('ranking and display use the same 2-decimal average; equal rounded scores share rank (1,1,3)', () => {
+  const teams = [
+    makeTeam('a', 'A', 1),
+    makeTeam('b', 'B', 2),
+    makeTeam('c', 'C', 3),
+  ];
+  const evals: Evaluation[] = [];
+  // A: 3 judges, all 5 -> 5.00. B: 200 judges, 190x5 + 10x4 -> 4.95. C: 3 judges, all 5 -> 5.00.
+  for (let i = 0; i < 3; i += 1) evals.push(makeEval(`JA${i}`, 'a', 5));
+  for (let i = 0; i < 3; i += 1) evals.push(makeEval(`JC${i}`, 'c', 5));
+  for (let i = 0; i < 190; i += 1) evals.push(makeEval(`JB${i}`, 'b', 5));
+  for (let i = 190; i < 200; i += 1) evals.push(makeEval(`JB${i}`, 'b', 4));
+  const board = calculateLeaderboard(teams, evals, 200, 'tie');
+  assert.deepEqual(
+    board.map((e) => [e.teamId, e.rank, e.isTied, e.averageFormatted]),
+    [
+      ['a', 1, true, '5.00'],
+      ['c', 1, true, '5.00'],
+      ['b', 3, false, '4.95'],
+    ],
+  );
+});
+
+test('x.xx5 averages round half up consistently for rank and display', () => {
+  const teams = [makeTeam('a', 'A', 1), makeTeam('b', 'B', 2)];
+  const evals: Evaluation[] = [];
+  // A: 199x4 + 1x5 over 200 judges = 4.005 -> 4.01 ; B: 4.01 exactly with 100 judges (96x4 + 4x... ) use 4.01 = 401/100
+  for (let i = 0; i < 199; i += 1) evals.push(makeEval(`JA${i}`, 'a', 4));
+  evals.push(makeEval('JA199', 'a', 5));
+  for (let i = 0; i < 99; i += 1) evals.push(makeEval(`JB${i}`, 'b', 4));
+  evals.push(makeEval('JB99', 'b', 5));
+  const board = calculateLeaderboard(teams, evals, 200, 'tie');
+  assert.equal(board[0].averageFormatted, '4.01');
+  assert.equal(board[1].averageFormatted, '4.01');
+  assert.equal(board[0].rank, 1);
+  assert.equal(board[1].rank, 1);
+  assert.equal(board[0].isTied && board[1].isTied, true);
+});
