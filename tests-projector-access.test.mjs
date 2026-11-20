@@ -17,10 +17,16 @@ const admin=env.authenticatedContext('adm',{email:'afnan12saad@gmail.com',email_
 for(const [n,db] of Object.entries(who)){
  await t(n+': cannot list all ratings (the leaderboard source)', getDocs(collection(db,'evaluations')), false);
  await t(n+': cannot list judges', getDocs(collection(db,'judges')), false);
- await t(n+': cannot read published leaderboard', getDoc(doc(db,'publicResults','leaderboard')), false);
+ await t(n+': CAN read released leaderboard', getDoc(doc(db,'publicResults','leaderboard')), true);
 }
 await t('judge: cannot query ratings of other judges', getDocs(query(collection(who.judge,'evaluations'),where('judgeUid','==','someone'))), false);
 await t('admin: can list ratings', getDocs(collection(admin,'evaluations')), true);
 await t('admin: can list judges', getDocs(collection(admin,'judges')), true);
 await t('admin: can read leaderboard doc', getDoc(doc(admin,'publicResults','leaderboard')), true);
+// Before an admin releases results, the standings stay admin-only
+await env.withSecurityRulesDisabled(async c=>{ await setDoc(doc(c.firestore(),'publicResults','leaderboard'),{published:false,totalJudges:1,totalTeams:1,totalSubmissions:1,entries:[],updatedAt:Timestamp.now()});});
+for(const [n,db] of Object.entries(who)){
+ await t(n+': cannot read unreleased leaderboard', getDoc(doc(db,'publicResults','leaderboard')), false);
+}
+await t('admin: can still read unreleased leaderboard', getDoc(doc(admin,'publicResults','leaderboard')), true);
 console.log(`${pass} passed, ${fail} failed`); await env.cleanup(); process.exit(fail?1:0);
