@@ -429,7 +429,9 @@ export const INITIAL_15_TEAMS: Array<{
   },
 ];
 
-export const MAX_ADMIN_USERS = 999999; // Limit removed per user requirements
+// Maximum admin accounts in total (owner included). Enforced by firestore.rules via adminSlots/s1..s5.
+export const MAX_ADMIN_USERS = 5;
+export const ADMIN_SLOT_IDS = ['s1', 's2', 's3', 's4', 's5'] as const;
 
 export function generateVerificationCode(): string {
   // 6-digit random verification code
