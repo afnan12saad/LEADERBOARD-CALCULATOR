@@ -103,7 +103,9 @@ export function AdminDashboardPage() {
     if (isAdmin && dataReady && !zeroInitAttempted.current) {
       if (!settings || teams.length === 0) {
         zeroInitAttempted.current = true;
-        void initializeEverythingToZeroWith15Teams(settings);
+        void initializeEverythingToZeroWith15Teams(settings, {
+          onlyIfNoRatings: true,
+        });
       }
     }
   }, [isAdmin, dataReady, settings, teams.length]);
