@@ -259,7 +259,7 @@ export function AdminLoginPage() {
                 Event Committee Console
               </p>
               <span className="inline-flex items-center px-2.5 py-1 rounded-md bg-[#081422] text-xs font-semibold font-mono-tabular text-slate-300">
-                {adminQuota.count} Active Admin{adminQuota.count === 1 ? '' : 's'} (Unlimited)
+                Max 5 admin accounts
               </span>
             </div>
             <h1 className="text-2xl font-display font-bold text-white">
