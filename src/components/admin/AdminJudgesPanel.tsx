@@ -313,7 +313,7 @@ export function AdminJudgesPanel({
                             type="button"
                             onClick={() => startEdit(judge)}
                             aria-label={`Edit ${judge.name}`}
-                            className="p-2 rounded-lg text-slate-300 hover:bg-[#163050] hover:text-white"
+                            className="min-w-[44px] min-h-[44px] inline-flex items-center justify-center rounded-lg text-slate-300 hover:bg-[#163050] hover:text-white"
                           >
                             <Edit2 className="w-4 h-4" />
                           </button>
@@ -321,7 +321,7 @@ export function AdminJudgesPanel({
                             type="button"
                             onClick={() => setDeleteTarget(judge)}
                             aria-label={`Delete ${judge.name}`}
-                            className="p-2 rounded-lg text-red-400 hover:bg-red-950/60"
+                            className="min-w-[44px] min-h-[44px] inline-flex items-center justify-center rounded-lg text-red-400 hover:bg-red-950/60"
                           >
                             <Trash2 className="w-4 h-4" />
                           </button>
