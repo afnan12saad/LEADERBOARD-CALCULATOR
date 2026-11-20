@@ -86,7 +86,7 @@ export function AdminLoginPage() {
           navigate('/admin');
         } else {
           setNotice(
-            'Signed in. Please wait for primary administrator approval or enter the 6-digit verification code below.',
+            'Signed in. Please wait for an administrator to approve your request.',
           );
         }
       } else {
@@ -131,7 +131,7 @@ export function AdminLoginPage() {
         confirmPassword,
       });
       setNotice(
-        `Verification email sent to ${email.trim()}. A verification code has also been dispatched to the primary administrator for approval.`,
+        `Verification email sent to ${email.trim()}. Your request is waiting for administrator approval.`,
       );
     } catch (err) {
       setError(
@@ -266,8 +266,7 @@ export function AdminLoginPage() {
               {headingText}
             </h1>
             <p className="text-sm text-slate-300 leading-relaxed">
-              Secure organizer management with first-admin verification code
-              approval for newly registered administrators.
+              Secure organizer management. New administrators need approval from an existing admin.
             </p>
           </div>
 
@@ -378,8 +377,7 @@ export function AdminLoginPage() {
                   First Admin Approval Pending
                 </div>
                 <p className="text-xs text-slate-300 leading-relaxed">
-                  A verification code and join request has been sent to the
-                  primary administrator’s email:{' '}
+                  Your join request is waiting for approval. The primary administrator is:{' '}
                   <strong className="text-white block sm:inline font-mono-tabular">
                     {targetFirstAdminEmail}
                   </strong>
@@ -568,8 +566,7 @@ export function AdminLoginPage() {
                     <p className="text-slate-400">
                       If you are the primary administrator, you will be
                       initialized automatically. If an administrator already
-                      exists, a verification code will be sent to the primary
-                      administrator’s email for approval.
+                      exists, your request must be approved by an existing admin.
                     </p>
                   </div>
 
