@@ -26,13 +26,18 @@ ok('FIXED set+merge increment: all 40 concurrent signups succeed ('+res.filter(x
 await env.withSecurityRulesDisabled(async c=>{ const s=await getDoc(doc(c.firestore(),'publicStats','summary')); ok('FIXED set+merge increment: counter == 40 (got '+s.data().totalJudges+')', s.data().totalJudges===40); });
 // 2b first-ever signup when summary doc missing
 await seed(null); await assertSucceeds(register('first','new')).then(()=>ok('FIXED set+merge increment: first signup creates summary=1',true)).catch(e=>ok('FIXED set+merge increment: first signup creates summary=1 :: '+e.message.slice(0,80),false));
-// 3 leaderboard access (resultsPublished = true)
+// 3 leaderboard access: publicly readable once an admin releases results, admin-only before
 await seed(0);
 const lb=(db)=>getDoc(doc(db,'publicResults','leaderboard'));
-await assertFails(lb(env.unauthenticatedContext().firestore())).then(()=>ok('anonymous visitor cannot read published leaderboard',true)).catch(()=>ok('anonymous visitor cannot read published leaderboard',false));
-await assertFails(lb(env.authenticatedContext('judgeX').firestore())).then(()=>ok('signed-in judge cannot read published leaderboard (even with resultsPublished=true)',true)).catch(()=>ok('signed-in judge cannot read published leaderboard',false));
-await assertFails(lb(env.authenticatedContext('stranger',{email:'x@y.com',email_verified:true}).firestore())).then(()=>ok('verified non-admin cannot read leaderboard',true)).catch(()=>ok('verified non-admin cannot read leaderboard',false));
-await assertSucceeds(lb(env.authenticatedContext('adm',{email:'afnan12saad@gmail.com',email_verified:true}).firestore())).then(()=>ok('admin can read leaderboard',true)).catch(e=>ok('admin can read leaderboard :: '+e.message.slice(0,80),false));
+await assertSucceeds(lb(env.unauthenticatedContext().firestore())).then(()=>ok('anonymous visitor can read released leaderboard',true)).catch(()=>ok('anonymous visitor can read released leaderboard',false));
+await assertSucceeds(lb(env.authenticatedContext('judgeX').firestore())).then(()=>ok('signed-in judge can read released leaderboard',true)).catch(()=>ok('signed-in judge can read released leaderboard',false));
+await assertSucceeds(lb(env.authenticatedContext('stranger',{email:'x@y.com',email_verified:true}).firestore())).then(()=>ok('verified non-admin can read released leaderboard',true)).catch(()=>ok('verified non-admin can read released leaderboard',false));
+await assertSucceeds(lb(env.authenticatedContext('adm',{email:'afnan12saad@gmail.com',email_verified:true}).firestore())).then(()=>ok('admin can read released leaderboard',true)).catch(e=>ok('admin can read released leaderboard :: '+e.message.slice(0,80),false));
+await env.withSecurityRulesDisabled(async c=>{ await setDoc(doc(c.firestore(),'publicResults','leaderboard'),{published:false,totalJudges:0,totalTeams:0,totalSubmissions:0,entries:[],updatedAt:Timestamp.now()}); });
+await assertFails(lb(env.unauthenticatedContext().firestore())).then(()=>ok('anonymous visitor cannot read unreleased leaderboard',true)).catch(()=>ok('anonymous visitor cannot read unreleased leaderboard',false));
+await assertFails(lb(env.authenticatedContext('judgeX').firestore())).then(()=>ok('signed-in judge cannot read unreleased leaderboard',true)).catch(()=>ok('signed-in judge cannot read unreleased leaderboard',false));
+await assertFails(lb(env.authenticatedContext('stranger',{email:'x@y.com',email_verified:true}).firestore())).then(()=>ok('verified non-admin cannot read unreleased leaderboard',true)).catch(()=>ok('verified non-admin cannot read unreleased leaderboard',false));
+await assertSucceeds(lb(env.authenticatedContext('adm',{email:'afnan12saad@gmail.com',email_verified:true}).firestore())).then(()=>ok('admin can still read unreleased leaderboard',true)).catch(()=>ok('admin can still read unreleased leaderboard',false));
 // evaluations still not readable by others
 await env.withSecurityRulesDisabled(async c=>{ await setDoc(doc(c.firestore(),'evaluations','J1_t1'),{id:'J1_t1',judgeId:'J1',judgeUid:'owner',teamId:'t1',rating:5,comment:'',createdAt:Timestamp.now(),updatedAt:Timestamp.now()}); });
 await assertFails(getDoc(doc(env.authenticatedContext('other').firestore(),'evaluations','J1_t1'))).then(()=>ok('judge cannot read another judge evaluation',true)).catch(()=>ok('judge cannot read another judge evaluation',false));
