@@ -71,12 +71,27 @@ of your Supabase organization, at most 2 emails/hour
 - Any static host works (the app's only config is the public URL + anon key in
   `src/services/supabaseClient.ts`).
 - Run unit tests with `npx tsx --test src/utils/scoring.test.ts`.
-- `live-tests*.mjs` are the live-backend regression suites (need a throwaway
-  admin account; create one via dashboard Add User, bind it as above, delete after).
+- `live-tests-f.mjs` and `live-tests-g.mts` are the live-backend regression
+  suites (need a throwaway admin account; create one via dashboard Add User,
+  bind it as above, delete after). Run F first, then G, against a clean project.
 
 ## Tested state at handoff
 
-- 18/18 scoring unit tests; typecheck + production build clean.
-- 43 live assertions green against this project (RLS gating, judge flows, scoring
-  constraints, admin-cap concurrency, publish + realtime + audience read, archive/reset).
-- Live project left clean: 0 users, 0 judges, 0 scores, 15 seeded teams, results unpublished.
+- 18/18 scoring unit tests (`npx tsx --test src/utils/scoring.test.ts`);
+  `npm run lint` (tsc) + `npm run build` clean.
+- 52 live assertions green against this project's final tree:
+  - Suite F (10): archive+reset RPC rejects a stale snapshot, archives the event,
+    reseeds 15 teams, clears scores, hides the leaderboard, resets settings/timer.
+  - Suite G (42): every direct Data API write path the app uses, exercised through
+    the app's own arenaService functions as a bound admin (settings, team
+    create/update/delete, judge create/update/delete with evaluations, admin
+    request reject, archive save, judge-count summary), plus migration-8
+    evaluation insert/update; and denial proofs for the same tables as an
+    anonymous judge session and a fully unauthenticated client.
+  - Earlier suites (not re-runnable after harness cleanup, results recorded):
+    RLS gating, judge registration/scoring flows, scoring constraints, admin-cap
+    concurrency under parallel approval, publish + realtime + audience read.
+- Live project left clean: 0 auth users, 0 admin bindings, 0 judges, 0 scores,
+  0 requests, 0 archives, 15 seeded teams, results unpublished, timer zeroed.
+  The first admin slot is yours: sign up in the app, then bind your UID with
+  the SQL in the first-admin section above.
