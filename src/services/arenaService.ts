@@ -1,28 +1,8 @@
-import {
-  collection,
-  doc,
-  getDoc,
-  getDocs,
-  increment,
-  onSnapshot,
-  orderBy,
-  query,
-  runTransaction,
-  type Transaction,
-  serverTimestamp,
-  setDoc,
-  updateDoc,
-  where,
-  writeBatch,
-  type Unsubscribe,
-} from 'firebase/firestore';
-import type { User } from 'firebase/auth';
-import {
-  BOOTSTRAPPED_ADMIN_EMAILS,
-  OperationType,
-  db,
-  handleFirestoreError,
-} from '../firebase';
+// Rank Rush data layer - Supabase/Postgres implementation.
+// Same exported API as the former Firestore implementation; security is
+// enforced server-side by RLS + RPCs (supabase/schema.sql), not by the client.
+import type { RealtimeChannel } from '@supabase/supabase-js';
+import { supabase } from './supabaseClient';
 import type {
   AdminQuota,
   AdminRequest,
@@ -32,7 +12,7 @@ import type {
   EventSettings,
   Judge,
   JudgeCredential,
-  JudgeSession,
+  LeaderboardEntry,
   PresentationStatus,
   PublicSummary,
   PublishedLeaderboard,
@@ -44,19 +24,15 @@ import {
   MAX_CRITERION_SCORE,
   MIN_CRITERION_SCORE,
   MAX_ADMIN_USERS,
-  ADMIN_SLOT_IDS,
-  MAX_WHOLE_EVENT_TIMER_SECONDS,
   calculateLeaderboard,
-  generateJudgeIdFromUid,
   generateVerificationCode,
-  MAX_TOTAL_SCORE,
-  isScoredEvaluation,
-  isValidStarRating,
   isValidCriteriaScores,
   slugifyTeamId,
   sumCriteria,
   validateJudgeNameAndEmail,
 } from '../utils/scoring';
+
+export type Unsubscribe = () => void;
 
 export const DEFAULT_EVENT_SETTINGS: Omit<EventSettings, 'updatedAt'> = {
   eventName: 'Annual Engineering Project Showcase',
@@ -77,720 +53,556 @@ export const DEFAULT_EVENT_SETTINGS: Omit<EventSettings, 'updatedAt'> = {
   timerStartedAtMs: 0,
 };
 
-export function subscribeEventSettings(
-  onData: (settings: EventSettings | null) => void,
+// ---------- row mappers (snake_case rows -> camelCase app types) ----------
+
+function mapSettings(r: any): EventSettings {
+  return {
+    eventName: r.event_name,
+    collegeName: r.college_name,
+    tagline: r.tagline,
+    venue: r.venue,
+    eventDate: r.event_date,
+    customDomain: r.custom_domain,
+    submissionsOpen: r.submissions_open,
+    editingAllowed: r.editing_allowed,
+    resultsPublished: r.results_published,
+    tieBreakerMode: r.tie_breaker_mode,
+    currentTeamId: r.current_team_id,
+    timerDurationSeconds: r.timer_duration_seconds,
+    timerWarningSeconds: r.timer_warning_seconds,
+    timerRemainingSeconds: r.timer_remaining_seconds,
+    timerRunning: r.timer_running,
+    timerStartedAtMs: Number(r.timer_started_at_ms),
+    updatedAt: r.updated_at,
+  };
+}
+
+function mapTeam(r: any): Team {
+  return {
+    id: r.id,
+    name: r.name,
+    projectTitle: r.project_title,
+    description: r.description,
+    logoUrl: r.logo_url,
+    presentationStatus: r.presentation_status as PresentationStatus,
+    orderIndex: r.order_index,
+    tieBreakerRank: r.tie_breaker_rank,
+    submittedCount: r.submitted_count,
+    createdAt: r.created_at,
+    updatedAt: r.updated_at,
+  };
+}
+
+function mapJudge(r: any): Judge {
+  return {
+    id: r.id,
+    judgeCode: r.judge_code,
+    name: r.name,
+    department: r.department,
+    email: r.email,
+    uid: r.uid,
+    active: r.active,
+    createdAt: r.created_at,
+    updatedAt: r.updated_at,
+  };
+}
+
+function mapEvaluation(r: any): Evaluation {
+  return {
+    id: r.id,
+    judgeId: r.judge_id,
+    judgeUid: r.judge_uid,
+    teamId: r.team_id,
+    scoreVersion: r.score_version,
+    criteria: r.criteria as CriteriaScores,
+    total: r.total,
+    comment: r.comment,
+    createdAt: r.created_at,
+    updatedAt: r.updated_at,
+  };
+}
+
+function mapAdmin(r: any): AdminUser {
+  return {
+    uid: r.uid,
+    email: r.email,
+    name: r.name,
+    isFirstAdmin: r.is_first_admin,
+    createdAt: r.created_at,
+  };
+}
+
+function mapAdminRequest(r: any): AdminRequest {
+  return {
+    id: r.id,
+    uid: r.uid,
+    email: r.email,
+    name: r.name,
+    verificationCode: r.verification_code,
+    status: r.status,
+    firstAdminEmail: r.first_admin_email ?? '',
+    firstAdminUid: r.first_admin_uid ?? '',
+    requestedAt: r.requested_at ?? r.created_at,
+    updatedAt: r.updated_at,
+  } as AdminRequest;
+}
+
+function mapLeaderboard(r: any): PublishedLeaderboard {
+  return {
+    published: r.published,
+    totalJudges: r.total_judges,
+    totalTeams: r.total_teams,
+    totalSubmissions: r.total_submissions,
+    entries: (r.entries ?? []) as LeaderboardEntry[],
+    updatedAt: r.updated_at,
+  };
+}
+
+// ---------- generic subscription helper ----------
+// Initial fetch, then re-fetch on any postgres change to the table(s).
+// RLS applies to every fetch, so a revoked permission degrades to empty data
+// instead of a crash (matches the old onSnapshot error handling).
+
+function subscribeTable<T>(
+  channelName: string,
+  tables: string[],
+  fetcher: () => Promise<T>,
+  onData: (data: T) => void,
 ): Unsubscribe {
-  const path = 'settings/event';
-  return onSnapshot(
-    doc(db, 'settings', 'event'),
-    (snap) => {
-      onData(snap.exists() ? (snap.data() as EventSettings) : null);
-    },
-    (error) => {
-      handleFirestoreError(error, OperationType.GET, path);
-    },
-  );
+  let disposed = false;
+  const run = async () => {
+    try {
+      const data = await fetcher();
+      if (!disposed) onData(data);
+    } catch (err) {
+      console.error(`[rank-rush] subscription fetch failed for ${channelName}`, err);
+    }
+  };
+  void run();
+  let channel: RealtimeChannel = supabase.channel(channelName);
+  for (const table of tables) {
+    channel = channel.on(
+      'postgres_changes',
+      { event: '*', schema: 'public', table },
+      () => void run(),
+    );
+  }
+  channel.subscribe();
+  return () => {
+    disposed = true;
+    void supabase.removeChannel(channel);
+  };
+}
+
+// ---------- settings / summary / quota ----------
+
+export function subscribeEventSettings(
+  onData: (settings: EventSettings) => void,
+): Unsubscribe {
+  return subscribeTable('settings_event', ['settings_event'], async () => {
+    const { data, error } = await supabase
+      .from('settings_event')
+      .select('*')
+      .eq('id', true)
+      .maybeSingle();
+    if (error) throw error;
+    return data ? mapSettings(data) : { ...DEFAULT_EVENT_SETTINGS };
+  }, onData);
 }
 
 export function subscribePublicSummary(
-  onData: (summary: PublicSummary | null) => void,
+  onData: (summary: PublicSummary) => void,
 ): Unsubscribe {
-  const path = 'publicStats/summary';
-  return onSnapshot(
-    doc(db, 'publicStats', 'summary'),
-    (snap) => {
-      onData(snap.exists() ? (snap.data() as PublicSummary) : null);
-    },
-    (error) => {
-      handleFirestoreError(error, OperationType.GET, path);
-    },
-  );
+  return subscribeTable('public_summary', ['public_summary'], async () => {
+    const { data, error } = await supabase
+      .from('public_summary')
+      .select('*')
+      .eq('id', true)
+      .maybeSingle();
+    if (error) throw error;
+    return { totalJudges: data?.total_judges ?? 0, updatedAt: data?.updated_at };
+  }, onData);
 }
 
 export function subscribeAdminQuota(
   onData: (quota: AdminQuota) => void,
 ): Unsubscribe {
-  const path = 'publicStats/adminQuota';
-  return onSnapshot(
-    doc(db, 'publicStats', 'adminQuota'),
-    (snap) => {
-      if (snap.exists()) {
-        onData(snap.data() as AdminQuota);
-      } else {
-        onData({ count: 0, maxAdmins: MAX_ADMIN_USERS });
-      }
-    },
-    (error) => {
-      handleFirestoreError(error, OperationType.GET, path);
-    },
-  );
+  return subscribeTable('admin_quota', ['admin_quota'], async () => {
+    const { data, error } = await supabase
+      .from('admin_quota')
+      .select('*')
+      .eq('id', true)
+      .maybeSingle();
+    if (error) throw error;
+    return {
+      count: data?.count ?? 0,
+      maxAdmins: data?.max_admins ?? MAX_ADMIN_USERS,
+      firstAdminEmail: data?.first_admin_email ?? undefined,
+      firstAdminUid: data?.first_admin_uid ?? undefined,
+      updatedAt: data?.updated_at,
+    };
+  }, onData);
 }
 
 export function subscribeAllAdmins(
   onData: (admins: AdminUser[]) => void,
 ): Unsubscribe {
-  const path = 'admins';
-  return onSnapshot(
-    collection(db, 'admins'),
-    (snap) => {
-      const list = snap.docs.map((d) => d.data() as AdminUser);
-      list.sort((a, b) => a.email.localeCompare(b.email));
-      onData(list);
-    },
-    (error) => {
-      handleFirestoreError(error, OperationType.LIST, path);
-    },
-  );
+  return subscribeTable('admins', ['admins'], async () => {
+    const { data, error } = await supabase.from('admins').select('*');
+    if (error) throw error;
+    return (data ?? []).map(mapAdmin);
+  }, onData);
 }
 
 export function subscribeAdminRequests(
   onData: (requests: AdminRequest[]) => void,
 ): Unsubscribe {
-  const path = 'adminRequests';
-  const q = query(
-    collection(db, 'adminRequests'),
-    orderBy('requestedAt', 'desc'),
-  );
-  return onSnapshot(
-    q,
-    (snap) => {
-      const list = snap.docs.map((d) => d.data() as AdminRequest);
-      onData(list);
-    },
-    (error) => {
-      const msg = error instanceof Error ? error.message : String(error);
-      if (
-        msg.includes('permission') ||
-        msg.includes('Missing or insufficient')
-      ) {
-        onData([]);
-        return;
-      }
-      handleFirestoreError(error, OperationType.LIST, path);
-    },
-  );
+  return subscribeTable('admin_requests', ['admin_requests'], async () => {
+    const { data, error } = await supabase
+      .from('admin_requests')
+      .select('*')
+      .order('requested_at', { ascending: false });
+    if (error) throw error;
+    return (data ?? []).map(mapAdminRequest);
+  }, onData);
 }
 
 export function subscribeMyPendingAdminRequest(
   uid: string,
   onData: (request: AdminRequest | null) => void,
 ): Unsubscribe {
-  const path = `adminRequests/${uid}`;
-  return onSnapshot(
-    doc(db, 'adminRequests', uid),
-    (snap) => {
-      onData(snap.exists() ? (snap.data() as AdminRequest) : null);
-    },
-    (error) => {
-      const msg = error instanceof Error ? error.message : String(error);
-      if (
-        msg.includes('permission') ||
-        msg.includes('Missing or insufficient')
-      ) {
-        onData(null);
-        return;
-      }
-      handleFirestoreError(error, OperationType.GET, path);
-    },
-  );
+  return subscribeTable(`my_admin_request_${uid}`, ['admin_requests'], async () => {
+    const { data, error } = await supabase
+      .from('admin_requests')
+      .select('*')
+      .eq('uid', uid)
+      .eq('status', 'pending')
+      .maybeSingle();
+    if (error) throw error;
+    return data ? mapAdminRequest(data) : null;
+  }, onData);
 }
 
 export async function getLiveAdminQuotaCount(): Promise<number> {
-  try {
-    const snap = await getDoc(doc(db, 'publicStats', 'adminQuota'));
-    if (!snap.exists()) return 0;
-    const data = snap.data() as AdminQuota;
-    return typeof data.count === 'number' ? data.count : 0;
-  } catch (err) {
-    handleFirestoreError(err, OperationType.GET, 'publicStats/adminQuota');
-  }
+  const { data, error } = await supabase
+    .from('admin_quota')
+    .select('count')
+    .eq('id', true)
+    .maybeSingle();
+  if (error) throw error;
+  return data?.count ?? 0;
 }
 
 export async function getFirstAdminInfo(): Promise<{
   email: string;
   uid: string;
-  name: string;
-}> {
-  try {
-    const qSnap = await getDoc(doc(db, 'publicStats', 'adminQuota'));
-    if (qSnap.exists()) {
-      const qData = qSnap.data() as AdminQuota;
-      if (qData.firstAdminEmail) {
-        return {
-          email: qData.firstAdminEmail,
-          uid: qData.firstAdminUid || '',
-          name: 'Primary Administrator',
-        };
-      }
-    }
-    const adminsSnap = await getDocs(
-      query(collection(db, 'admins'), orderBy('createdAt', 'asc')),
-    );
-    if (!adminsSnap.empty) {
-      const first = adminsSnap.docs[0].data() as AdminUser;
-      return {
-        email: first.email,
-        uid: first.uid,
-        name: first.name || 'Primary Administrator',
-      };
-    }
-  } catch {
-    // ignore
-  }
-  return {
-    email: BOOTSTRAPPED_ADMIN_EMAILS[0],
-    uid: '',
-    name: 'Primary Administrator',
-  };
+  count: number;
+} | null> {
+  const [{ data: admin }, { data: quota }] = await Promise.all([
+    supabase.from('admins').select('*').eq('is_first_admin', true).maybeSingle(),
+    supabase.from('admin_quota').select('*').eq('id', true).maybeSingle(),
+  ]);
+  if (!admin) return null;
+  return { email: admin.email, uid: admin.uid, count: quota?.count ?? 0 };
 }
 
+// ---------- admin join requests (cap of MAX_ADMIN_USERS enforced by RPC) ----------
+
 export async function createAdminJoinRequest(params: {
-  user: User;
+  uid: string;
+  email: string;
   name: string;
 }): Promise<AdminRequest> {
-  const cleanEmail = (params.user.email ?? '').trim().slice(0, 160);
-  const cleanName = params.name.trim().slice(0, 100) || 'Co-Administrator';
-  const firstAdmin = await getFirstAdminInfo();
-  const code = generateVerificationCode();
-
-  const reqDoc: AdminRequest = {
-    id: params.user.uid,
-    uid: params.user.uid,
-    email: cleanEmail,
-    name: cleanName,
-    verificationCode: code,
-    status: 'pending',
-    firstAdminEmail: firstAdmin.email,
-    firstAdminUid: firstAdmin.uid,
-  };
-
-  try {
-    await setDoc(doc(db, 'adminRequests', params.user.uid), {
-      ...reqDoc,
-      requestedAt: serverTimestamp(),
-      updatedAt: serverTimestamp(),
-    });
-    return reqDoc;
-  } catch (err) {
-    handleFirestoreError(
-      err,
-      OperationType.CREATE,
-      `adminRequests/${params.user.uid}`,
-    );
+  const quota = await supabase
+    .from('admin_quota')
+    .select('count, max_admins, first_admin_email, first_admin_uid')
+    .eq('id', true)
+    .maybeSingle();
+  const count = quota.data?.count ?? 0;
+  const maxAdmins = quota.data?.max_admins ?? MAX_ADMIN_USERS;
+  if (count >= maxAdmins) {
+    throw new Error(`The admin team is full (${maxAdmins} admins maximum).`);
   }
+  const existing = await supabase
+    .from('admin_requests')
+    .select('*')
+    .eq('uid', params.uid)
+    .eq('status', 'pending')
+    .maybeSingle();
+  if (existing.data) return mapAdminRequest(existing.data); // idempotent
+
+  const row = {
+    uid: params.uid,
+    email: params.email.trim().toLowerCase().slice(0, 160),
+    name: params.name.trim().slice(0, 100),
+    verification_code: generateVerificationCode(),
+    status: 'pending' as const,
+    first_admin_email: quota.data?.first_admin_email ?? '',
+    first_admin_uid: quota.data?.first_admin_uid ?? null,
+  };
+  const { data, error } = await supabase
+    .from('admin_requests')
+    .insert(row)
+    .select()
+    .single();
+  if (error) throw error;
+  return mapAdminRequest(data);
 }
 
 export interface AdminSlotUsage {
-  used: number;
-  max: number;
+  count: number;
+  maxAdmins: number;
+  admins: AdminUser[];
+  /** Kept for the existing settings UI: always true (no slots to reconcile). */
   reconciled: boolean;
+  /** Free admin seat labels, length = maxAdmins - count. */
   free: string[];
 }
 
-/** Reads the five slot docs. Slots are the enforced cap (see firestore.rules). */
 export async function getAdminSlotUsage(): Promise<AdminSlotUsage> {
-  try {
-    const [slots, rec] = await Promise.all([
-      Promise.all(ADMIN_SLOT_IDS.map((id) => getDoc(doc(db, 'adminSlots', id)))),
-      getDoc(doc(db, 'adminSlots', 'reconciled')),
-    ]);
-    const free = ADMIN_SLOT_IDS.filter((_, i) => !slots[i].exists());
-    return {
-      used: MAX_ADMIN_USERS - free.length,
-      max: MAX_ADMIN_USERS,
-      reconciled: rec.exists(),
-      free: [...free],
-    };
-  } catch (err) {
-    handleFirestoreError(err, OperationType.GET, 'adminSlots');
-  }
-}
-
-const ADMIN_FULL_MESSAGE =
-  'The maximum of 5 admin accounts is reached (or slots have not been reconciled yet). Remove an admin before adding another.';
-
-/** Tries each free slot in turn so a concurrent winner only costs us a retry. */
-async function commitAdminWithFreeSlot(
-  adminUid: string,
-  build: (batch: ReturnType<typeof writeBatch>, slot: string) => void,
-): Promise<string> {
-  const usage = await getAdminSlotUsage();
-  if (!usage.reconciled || usage.free.length === 0) {
-    throw new Error(ADMIN_FULL_MESSAGE);
-  }
-  let lastErr: unknown = null;
-  for (const slot of usage.free) {
-    const batch = writeBatch(db);
-    build(batch, slot);
-    batch.set(doc(db, 'adminSlots', slot), {
-      uid: adminUid,
-      createdAt: serverTimestamp(),
-    });
-    try {
-      await batch.commit();
-      return slot;
-    } catch (err) {
-      lastErr = err;
-    }
-  }
-  if (lastErr) {
-    throw new Error(ADMIN_FULL_MESSAGE);
-  }
-  throw new Error(ADMIN_FULL_MESSAGE);
-}
-
-/**
- * Assigns a slot to every existing unslotted admin (nobody loses access). It does NOT
- * mark the installation reconciled: new admins stay blocked until a trusted migration
- * sets the adminSlots/reconciled marker after checking the full admin list.
- * Refuses when more than five admins exist.
- */
-export async function reconcileAdminSlots(): Promise<{ slotted: number }> {
-  const adminsSnap = await getDocs(collection(db, 'admins'));
-  const unslotted = adminsSnap.docs.filter((d) => !(d.data() as { slot?: string }).slot);
-  const taken = new Set(
-    adminsSnap.docs
-      .map((d) => (d.data() as { slot?: string }).slot)
-      .filter((x): x is string => Boolean(x)),
-  );
-  const free = ADMIN_SLOT_IDS.filter((id) => !taken.has(id));
-  if (adminsSnap.size > MAX_ADMIN_USERS || unslotted.length > free.length) {
-    throw new Error(
-      `There are ${adminsSnap.size} admin accounts, above the limit of 5. Remove accounts first; nothing was changed.`,
-    );
-  }
-  const batch = writeBatch(db);
-  unslotted.forEach((d, i) => {
-    batch.update(doc(db, 'admins', d.id), { slot: free[i] });
-    batch.set(doc(db, 'adminSlots', free[i]), {
-      uid: d.id,
-      createdAt: serverTimestamp(),
-    });
-  });
-  try {
-    await batch.commit();
-  } catch (err) {
-    handleFirestoreError(err, OperationType.WRITE, 'adminSlots');
-  }
-  return { slotted: unslotted.length };
-}
-
-export async function approveAdminJoinRequest(
-  request: AdminRequest,
-  approvedByEmail: string,
-): Promise<void> {
-  try {
-    await commitAdminWithFreeSlot(request.uid, (batch, slot) => {
-      batch.update(doc(db, 'adminRequests', request.uid), {
-        status: 'approved',
-        approvedAt: serverTimestamp(),
-        approvedBy: approvedByEmail.trim().slice(0, 160),
-        updatedAt: serverTimestamp(),
-      });
-      batch.set(doc(db, 'admins', request.uid), {
-        uid: request.uid,
-        email: request.email,
-        name: request.name,
-        isFirstAdmin: false,
-        slot,
-        createdAt: serverTimestamp(),
-      });
-      batch.set(
-        doc(db, 'publicStats', 'adminQuota'),
-        { count: increment(1), updatedAt: serverTimestamp() },
-        { merge: true },
-      );
-    });
-  } catch (err) {
-    if (err instanceof Error && err.message === ADMIN_FULL_MESSAGE) throw err;
-    handleFirestoreError(err, OperationType.WRITE, `admins/${request.uid}`);
-  }
-}
-
-export async function rejectAdminJoinRequest(requestUid: string): Promise<void> {
-  try {
-    await updateDoc(doc(db, 'adminRequests', requestUid), {
-      status: 'rejected',
-      updatedAt: serverTimestamp(),
-    });
-  } catch (err) {
-    handleFirestoreError(
-      err,
-      OperationType.UPDATE,
-      `adminRequests/${requestUid}`,
-    );
-  }
-}
-
-export async function claimAdminSlot(
-  user: User,
-  preferredName?: string,
-): Promise<AdminUser> {
-  if (!user.emailVerified) {
-    throw new Error(
-      'Please verify your email address via the verification link before accessing the Admin Console.',
-    );
-  }
-
-  const existingSnap = await getDoc(doc(db, 'admins', user.uid));
-  if (existingSnap.exists()) {
-    return existingSnap.data() as AdminUser;
-  }
-
-  const currentCount = await getLiveAdminQuotaCount();
-  const cleanEmail = (user.email ?? '').trim().slice(0, 160);
-  const fallbackName = cleanEmail.split('@')[0] || 'Event Admin';
-  const cleanName = (preferredName || user.displayName || fallbackName)
-    .trim()
-    .slice(0, 100);
-
-  const isBootstrap =
-    BOOTSTRAPPED_ADMIN_EMAILS.includes(cleanEmail.toLowerCase()) ||
-    currentCount === 0;
-
-  if (isBootstrap) {
-    // First / Primary Admin bootstrap:
-    const batch = writeBatch(db);
-    batch.set(doc(db, 'admins', user.uid), {
-      uid: user.uid,
-      email: cleanEmail,
-      name: cleanName,
-      isFirstAdmin: true,
-      slot: 's1',
-      createdAt: serverTimestamp(),
-    });
-    batch.set(doc(db, 'adminSlots', 's1'), {
-      uid: user.uid,
-      createdAt: serverTimestamp(),
-    });
-    batch.set(doc(db, 'adminSlots', 'reconciled'), { at: serverTimestamp() });
-    batch.set(
-      doc(db, 'publicStats', 'adminQuota'),
-      {
-        count: currentCount + 1,
-        firstAdminEmail: cleanEmail,
-        firstAdminUid: user.uid,
-        updatedAt: serverTimestamp(),
-      },
-      { merge: true },
-    );
-
-    try {
-      await batch.commit();
-      return {
-        uid: user.uid,
-        email: cleanEmail,
-        name: cleanName,
-        isFirstAdmin: true,
-      };
-    } catch (err) {
-      handleFirestoreError(err, OperationType.WRITE, `admins/${user.uid}`);
-    }
-  }
-
-  // Not the first admin: must have approved adminRequest
-  const reqSnap = await getDoc(doc(db, 'adminRequests', user.uid));
-  if (!reqSnap.exists() || (reqSnap.data() as AdminRequest).status !== 'approved') {
-    throw new Error(
-      'Administrator approval required. A verification code and approval request has been sent to the primary administrator. Please wait for their approval or enter the verification code.',
-    );
-  }
-
-  try {
-    await commitAdminWithFreeSlot(user.uid, (batch, slot) => {
-      batch.set(doc(db, 'admins', user.uid), {
-        uid: user.uid,
-        email: cleanEmail,
-        name: cleanName,
-        isFirstAdmin: false,
-        slot,
-        createdAt: serverTimestamp(),
-      });
-      batch.set(
-        doc(db, 'publicStats', 'adminQuota'),
-        { count: increment(1), updatedAt: serverTimestamp() },
-        { merge: true },
-      );
-    });
-  } catch (err) {
-    if (err instanceof Error && err.message === ADMIN_FULL_MESSAGE) throw err;
-    handleFirestoreError(err, OperationType.WRITE, `admins/${user.uid}`);
-  }
-
+  const [{ data: admins }, { data: quota }] = await Promise.all([
+    supabase.from('admins').select('*'),
+    supabase.from('admin_quota').select('*').eq('id', true).maybeSingle(),
+  ]);
+  const count = quota?.count ?? (admins ?? []).length;
+  const maxAdmins = quota?.max_admins ?? MAX_ADMIN_USERS;
   return {
-    uid: user.uid,
-    email: cleanEmail,
-    name: cleanName,
-    isFirstAdmin: false,
+    count,
+    maxAdmins,
+    admins: (admins ?? []).map(mapAdmin),
+    reconciled: true,
+    free: Array.from({ length: Math.max(0, maxAdmins - count) }, (_, i) => `seat-${count + i + 1}`),
   };
 }
 
-export async function removeAdminAccount(targetUid: string): Promise<void> {
-  try {
-    const currentCount = await getLiveAdminQuotaCount();
-    const targetSnap = await getDoc(doc(db, 'admins', targetUid));
-    const targetSlot = targetSnap.exists()
-      ? (targetSnap.data() as { slot?: string }).slot
-      : undefined;
-    const batch = writeBatch(db);
-    batch.delete(doc(db, 'admins', targetUid));
-    if (targetSlot) batch.delete(doc(db, 'adminSlots', targetSlot));
-    batch.set(
-      doc(db, 'publicStats', 'adminQuota'),
-      {
-        count: Math.max(0, currentCount - 1),
-        updatedAt: serverTimestamp(),
-      },
-      { merge: true },
-    );
-    await batch.commit();
-  } catch (err) {
-    handleFirestoreError(err, OperationType.DELETE, `admins/${targetUid}`);
-  }
+export async function approveAdminJoinRequest(
+  requestUid: string,
+  approvedBy: string,
+): Promise<void> {
+  const { error } = await supabase.rpc('approve_admin_request', {
+    p_uid: requestUid,
+    p_approved_by: approvedBy.slice(0, 160),
+  });
+  if (error) throw new Error(error.message);
 }
+
+export async function rejectAdminJoinRequest(requestUid: string): Promise<void> {
+  const { error } = await supabase
+    .from('admin_requests')
+    .update({ status: 'rejected' })
+    .eq('uid', requestUid)
+    .eq('status', 'pending');
+  if (error) throw error;
+}
+
+export async function removeAdminAccount(targetUid: string): Promise<void> {
+  const { error } = await supabase.rpc('remove_admin', { p_uid: targetUid });
+  if (error) throw new Error(error.message);
+}
+
+// ---------- teams ----------
 
 export function subscribeTeams(onData: (teams: Team[]) => void): Unsubscribe {
-  const path = 'teams';
-  const q = query(collection(db, 'teams'), orderBy('orderIndex', 'asc'));
-  return onSnapshot(
-    q,
-    (snap) => {
-      const list = snap.docs.map((d) => d.data() as Team);
-      onData(list);
-    },
-    (error) => {
-      handleFirestoreError(error, OperationType.LIST, path);
-    },
-  );
+  return subscribeTable('teams', ['teams'], async () => {
+    const { data, error } = await supabase
+      .from('teams')
+      .select('*')
+      .order('order_index', { ascending: true });
+    if (error) throw error;
+    return (data ?? []).map(mapTeam);
+  }, onData);
 }
 
-export function subscribePublishedLeaderboard(
-  onData: (board: PublishedLeaderboard | null) => void,
-  canRead: boolean,
-): Unsubscribe {
-  if (!canRead) {
-    onData(null);
-    return () => {};
-  }
-  const path = 'publicResults/leaderboard';
-  return onSnapshot(
-    doc(db, 'publicResults', 'leaderboard'),
-    (snap) => {
-      onData(snap.exists() ? (snap.data() as PublishedLeaderboard) : null);
-    },
-    (error) => {
-      // If results were just unpublished mid-session, gracefully hide rather than crashing
-      const msg = error instanceof Error ? error.message : String(error);
-      if (msg.includes('permission') || msg.includes('Missing or insufficient')) {
-        onData(null);
-        return;
-      }
-      handleFirestoreError(error, OperationType.GET, path);
-    },
-  );
+export async function saveTeamRecord(params: {
+  existingTeam?: Team;
+  id?: string;
+  name: string;
+  projectTitle: string;
+  description: string;
+  logoUrl?: string;
+  presentationStatus: PresentationStatus;
+  orderIndex?: number;
+  tieBreakerRank?: number;
+}): Promise<string> {
+  const id = params.existingTeam?.id ?? params.id ?? slugifyTeamId(params.name);
+  const { data: existing } = await supabase
+    .from('teams')
+    .select('order_index, tie_breaker_rank')
+    .eq('id', id)
+    .maybeSingle();
+  const { data: maxRow } = await supabase
+    .from('teams')
+    .select('order_index')
+    .order('order_index', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  const nextOrder = params.orderIndex ?? existing?.order_index ?? ((maxRow?.order_index ?? 0) + 1);
+  const { error } = await supabase.from('teams').upsert({
+    id,
+    name: params.name.trim().slice(0, 100),
+    project_title: params.projectTitle.trim().slice(0, 160),
+    description: params.description.trim().slice(0, 500),
+    logo_url: params.logoUrl ?? params.existingTeam?.logoUrl ?? '',
+    presentation_status: params.presentationStatus,
+    order_index: nextOrder,
+    tie_breaker_rank: params.tieBreakerRank ?? existing?.tie_breaker_rank ?? nextOrder,
+    updated_at: new Date().toISOString(),
+  });
+  if (error) throw error;
+  return id;
 }
+
+export async function deleteTeamAndEvaluations(
+  teamId: string,
+  _settings?: unknown,
+): Promise<void> {
+  // evaluations reference teams with ON DELETE CASCADE.
+  const { error } = await supabase.from('teams').delete().eq('id', teamId);
+  if (error) throw error;
+}
+
+// ---------- judges ----------
+
+export function subscribeAllJudges(
+  onData: (judges: Judge[]) => void,
+): Unsubscribe {
+  return subscribeTable('judges', ['judges'], async () => {
+    const { data, error } = await supabase
+      .from('judges')
+      .select('*')
+      .order('judge_code', { ascending: true });
+    if (error) throw error;
+    return (data ?? []).map(mapJudge);
+  }, onData);
+}
+
+// Legacy judge-code credentials do not exist in the Supabase backend.
+export function subscribeAllJudgeCredentials(
+  onData: (creds: JudgeCredential[]) => void,
+): Unsubscribe {
+  onData([]);
+  return () => {};
+}
+
+export async function registerJudgeByNameEmail(
+  user: { uid: string },
+  rawName: string,
+  rawEmail: string,
+): Promise<Judge> {
+  const errMsg = validateJudgeNameAndEmail(rawName, rawEmail);
+  if (errMsg) throw new Error(errMsg);
+  const { data, error } = await supabase.rpc('register_judge', {
+    p_name: rawName.trim(),
+    p_email: rawEmail.trim(),
+  });
+  if (error) throw new Error(error.message);
+  return mapJudge(data);
+}
+
+export async function saveJudgeRecord(params: {
+  existingJudge?: Judge;
+  id?: string;
+  judgeCode?: string;
+  name: string;
+  department?: string;
+  email: string;
+  accessCode?: string;
+  active: boolean;
+  allJudgesCountAfter?: number;
+}): Promise<void> {
+  const row = {
+    name: params.name.trim().slice(0, 100),
+    department: (params.department ?? '').trim().slice(0, 100),
+    email: params.email.trim().toLowerCase().slice(0, 160),
+    active: params.active,
+    updated_at: new Date().toISOString(),
+  };
+  if (params.existingJudge) {
+    const { error } = await supabase
+      .from('judges')
+      .update(row)
+      .eq('id', params.existingJudge.id);
+    if (error) throw error;
+    return;
+  }
+  // Admin pre-added judge: no auth account yet (uid NULL). The judge binds
+  // the row on first registration via register_judge's email match.
+  const id = params.judgeCode ?? `J_${Date.now().toString(36).toUpperCase()}`;
+  const { error } = await supabase.from('judges').insert({
+    id,
+    judge_code: params.judgeCode ?? id,
+    uid: null,
+    ...row,
+  });
+  if (error) throw error;
+  if (params.allJudgesCountAfter != null) {
+    await syncJudgeCountSummary(params.allJudgesCountAfter);
+  }
+}
+
+// Unlinking a judge's auth account is modeled as deactivation in the new
+// backend: the record (and their scores) stay, access stops.
+export async function unlinkJudgeAccount(judgeId: string): Promise<void> {
+  const { error } = await supabase
+    .from('judges')
+    .update({ active: false, updated_at: new Date().toISOString() })
+    .eq('id', judgeId);
+  if (error) throw error;
+}
+
+export async function deleteJudgeAndEvaluations(
+  judge: Judge | string,
+  _remainingActive?: number,
+): Promise<void> {
+  const judgeId = typeof judge === 'string' ? judge : judge.id;
+  const wasActive = typeof judge === 'string' ? true : judge.active;
+  const { error: evalError } = await supabase
+    .from('evaluations')
+    .delete()
+    .eq('judge_id', judgeId);
+  if (evalError) throw evalError;
+  const { error } = await supabase.from('judges').delete().eq('id', judgeId);
+  if (error) throw error;
+  if (wasActive) {
+    const { data } = await supabase
+      .from('public_summary')
+      .select('total_judges')
+      .eq('id', true)
+      .maybeSingle();
+    await supabase
+      .from('public_summary')
+      .update({
+        total_judges: Math.max(0, (data?.total_judges ?? 1) - 1),
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', true);
+  }
+}
+
+// ---------- evaluations ----------
 
 export function subscribeMyEvaluations(
   judgeUid: string,
   onData: (evaluations: Evaluation[]) => void,
 ): Unsubscribe {
-  const path = 'evaluations';
-  const q = query(
-    collection(db, 'evaluations'),
-    where('judgeUid', '==', judgeUid),
-  );
-  return onSnapshot(
-    q,
-    (snap) => {
-      onData(snap.docs.map((d) => d.data() as Evaluation));
-    },
-    (error) => {
-      handleFirestoreError(error, OperationType.LIST, path);
-    },
-  );
-}
-
-export function subscribeAllJudges(
-  onData: (judges: Judge[]) => void,
-): Unsubscribe {
-  const path = 'judges';
-  const q = query(collection(db, 'judges'), orderBy('judgeCode', 'asc'));
-  return onSnapshot(
-    q,
-    (snap) => {
-      onData(snap.docs.map((d) => d.data() as Judge));
-    },
-    (error) => {
-      handleFirestoreError(error, OperationType.LIST, path);
-    },
-  );
-}
-
-export function subscribeAllJudgeCredentials(
-  onData: (creds: JudgeCredential[]) => void,
-): Unsubscribe {
-  const path = 'judgeCredentials';
-  return onSnapshot(
-    collection(db, 'judgeCredentials'),
-    (snap) => {
-      onData(snap.docs.map((d) => d.data() as JudgeCredential));
-    },
-    (error) => {
-      handleFirestoreError(error, OperationType.LIST, path);
-    },
-  );
+  return subscribeTable(`my_evals_${judgeUid}`, ['evaluations'], async () => {
+    const { data, error } = await supabase
+      .from('evaluations')
+      .select('*')
+      .eq('judge_uid', judgeUid);
+    if (error) throw error;
+    return (data ?? []).map(mapEvaluation);
+  }, onData);
 }
 
 export function subscribeAllEvaluations(
   onData: (evaluations: Evaluation[]) => void,
 ): Unsubscribe {
-  const path = 'evaluations';
-  return onSnapshot(
-    collection(db, 'evaluations'),
-    (snap) => {
-      onData(snap.docs.map((d) => d.data() as Evaluation));
-    },
-    (error) => {
-      handleFirestoreError(error, OperationType.LIST, path);
-    },
-  );
-}
-
-export async function registerJudgeByNameEmail(
-  user: User,
-  rawName: string,
-  rawEmail: string,
-): Promise<Judge> {
-  const errMsg = validateJudgeNameAndEmail(rawName, rawEmail);
-  if (errMsg) {
-    throw new Error(errMsg);
-  }
-
-  const cleanName = rawName.trim().slice(0, 100);
-  const cleanEmail = rawEmail.trim().toLowerCase().slice(0, 160);
-
-  const sessionSnap = await getDoc(doc(db, 'judgeSessions', user.uid));
-  if (sessionSnap.exists()) {
-    const existingSession = sessionSnap.data() as JudgeSession;
-    const judgeSnap = await getDoc(doc(db, 'judges', existingSession.judgeId));
-    if (judgeSnap.exists()) {
-      const existingJudge = judgeSnap.data() as Judge;
-      if (!existingJudge.active) {
-        throw new Error(
-          'Your judge access has been deactivated by an administrator.',
-        );
-      }
-      await updateDoc(doc(db, 'judges', existingJudge.id), {
-        name: cleanName,
-        email: cleanEmail,
-        updatedAt: serverTimestamp(),
-      });
-      return {
-        ...existingJudge,
-        name: cleanName,
-        email: cleanEmail,
-      };
-    }
-  }
-
-  const judgeId = generateJudgeIdFromUid(user.uid);
-  const batch = writeBatch(db);
-  batch.set(doc(db, 'judges', judgeId), {
-    id: judgeId,
-    judgeCode: judgeId,
-    name: cleanName,
-    department: '',
-    email: cleanEmail,
-    uid: user.uid,
-    active: true,
-    createdAt: serverTimestamp(),
-    updatedAt: serverTimestamp(),
-  });
-  batch.set(doc(db, 'judgeSessions', user.uid), {
-    uid: user.uid,
-    judgeId,
-    accessCode: 'SELF_AUTH',
-    createdAt: serverTimestamp(),
-  });
-  // Server-side increment with merge: no stale read, so simultaneous sign-ups
-  // all satisfy the rule `totalJudges == existing + 1` (first write creates 1).
-  // `merge: true` is required: a plain set() with increment() is rejected by
-  // the rules (verified in the Firestore emulator).
-  batch.set(
-    doc(db, 'publicStats', 'summary'),
-    {
-      totalJudges: increment(1),
-      updatedAt: serverTimestamp(),
-    },
-    { merge: true },
-  );
-
-  try {
-    await batch.commit();
-  } catch (err) {
-    handleFirestoreError(err, OperationType.WRITE, `judges/${judgeId}`);
-  }
-
-  return {
-    id: judgeId,
-    judgeCode: judgeId,
-    name: cleanName,
-    department: '',
-    email: cleanEmail,
-    uid: user.uid,
-    active: true,
-  };
-}
-
-export async function claimJudgeSlot(
-  user: User,
-  rawJudgeCode: string,
-  rawAccessCode: string,
-): Promise<Judge> {
-  const judgeId = rawJudgeCode.trim().toUpperCase();
-  const accessCode = rawAccessCode.trim();
-
-  if (!judgeId || !/^[A-Z0-9_-]{2,32}$/.test(judgeId)) {
-    throw new Error('Enter a valid Judge ID (for example: JUDGE01).');
-  }
-  if (!accessCode || accessCode.length < 4) {
-    throw new Error('Enter your assigned access code (minimum 4 characters).');
-  }
-
-  const batch = writeBatch(db);
-  batch.set(doc(db, 'judgeSessions', user.uid), {
-    uid: user.uid,
-    judgeId,
-    accessCode,
-    createdAt: serverTimestamp(),
-  });
-  batch.update(doc(db, 'judges', judgeId), {
-    uid: user.uid,
-    email: (user.email ?? '').slice(0, 160),
-    updatedAt: serverTimestamp(),
-  });
-
-  try {
-    await batch.commit();
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    if (msg.includes('permission') || msg.includes('Missing or insufficient')) {
-      throw new Error(
-        'Invalid Judge ID or access code, or this Judge ID is already assigned to a different account.',
-      );
-    }
-    throw err;
-  }
-
-  try {
-    const judgeSnap = await getDoc(doc(db, 'judges', judgeId));
-    if (!judgeSnap.exists()) {
-      throw new Error('Judge profile could not be loaded after verification.');
-    }
-    return judgeSnap.data() as Judge;
-  } catch (err) {
-    handleFirestoreError(err, OperationType.GET, `judges/${judgeId}`);
-  }
+  return subscribeTable('evaluations', ['evaluations'], async () => {
+    const { data, error } = await supabase.from('evaluations').select('*');
+    if (error) throw error;
+    return (data ?? []).map(mapEvaluation);
+  }, onData);
 }
 
 export async function submitCriteriaScores(params: {
@@ -801,351 +613,44 @@ export async function submitCriteriaScores(params: {
   comment: string;
   isEdit: boolean;
 }): Promise<void> {
-  const { judgeId, judgeUid, teamId, criteria, comment, isEdit } = params;
+  const { judgeId, teamId, criteria, comment } = params;
   if (!isValidCriteriaScores(criteria)) {
     throw new Error(
       `Score every criterion from ${MIN_CRITERION_SCORE} to ${MAX_CRITERION_SCORE}.`,
     );
   }
-  // Store exactly the five known keys, and a total computed here from them.
   const clean = Object.fromEntries(
     CRITERIA.map(({ id }) => [id, criteria[id]]),
   ) as CriteriaScores;
-  const total = sumCriteria(clean);
-
-  const cleanComment = comment.trim().slice(0, 1000);
-  const evalId = `${judgeId}_${teamId}`;
-  const evalPath = `evaluations/${evalId}`;
-
-  if (isEdit) {
-    try {
-      await updateDoc(doc(db, 'evaluations', evalId), {
-        criteria: clean,
-        total,
-        comment: cleanComment,
-        updatedAt: serverTimestamp(),
-      });
-    } catch (err) {
-      handleFirestoreError(err, OperationType.UPDATE, evalPath);
-    }
-    return;
-  }
-
-  const batch = writeBatch(db);
-  batch.set(doc(db, 'evaluations', evalId), {
-    id: evalId,
-    judgeId,
-    judgeUid,
-    teamId,
-    scoreVersion: 2,
-    criteria: clean,
-    total,
-    comment: cleanComment,
-    createdAt: serverTimestamp(),
-    updatedAt: serverTimestamp(),
+  const { error } = await supabase.rpc('submit_score', {
+    p_judge_id: judgeId,
+    p_team_id: teamId,
+    p_criteria: clean,
+    p_comment: comment.trim().slice(0, 1000),
   });
-  batch.update(doc(db, 'teams', teamId), {
-    submittedCount: increment(1),
-    updatedAt: serverTimestamp(),
-  });
-
-  try {
-    await batch.commit();
-  } catch (err) {
-    handleFirestoreError(err, OperationType.WRITE, evalPath);
-  }
+  if (error) throw new Error(error.message);
 }
 
-export async function initializeDefaultEventData(): Promise<void> {
-  const batch = writeBatch(db);
+// ---------- published leaderboard ----------
 
-  batch.set(doc(db, 'settings', 'event'), {
-    ...DEFAULT_EVENT_SETTINGS,
-    updatedAt: serverTimestamp(),
-  });
-
-  batch.set(doc(db, 'publicStats', 'summary'), {
-    totalJudges: 0,
-    updatedAt: serverTimestamp(),
-  });
-
-  batch.set(doc(db, 'publicResults', 'leaderboard'), {
-    published: false,
-    totalJudges: 0,
-    totalTeams: 0,
-    totalSubmissions: 0,
-    entries: [],
-    updatedAt: serverTimestamp(),
-  });
-
-  try {
-    await batch.commit();
-  } catch (err) {
-    handleFirestoreError(err, OperationType.WRITE, 'settings/event');
+export function subscribePublishedLeaderboard(
+  onData: (board: PublishedLeaderboard | null) => void,
+  canRead: boolean,
+): Unsubscribe {
+  if (!canRead) {
+    onData(null);
+    return () => {};
   }
-}
-
-export async function saveEventSettings(
-  settings: EventSettings,
-): Promise<void> {
-  try {
-    await setDoc(doc(db, 'settings', 'event'), {
-      eventName: settings.eventName.trim().slice(0, 120) || 'Project Arena',
-      collegeName:
-        settings.collegeName.trim().slice(0, 140) || 'College Project Showcase',
-      tagline: settings.tagline.trim().slice(0, 120),
-      venue: settings.venue.trim().slice(0, 140),
-      eventDate: settings.eventDate.trim().slice(0, 60),
-      customDomain: settings.customDomain.trim().slice(0, 200),
-      submissionsOpen: Boolean(settings.submissionsOpen),
-      editingAllowed: Boolean(settings.editingAllowed),
-      resultsPublished: Boolean(settings.resultsPublished),
-      // Always 'tie': normalizes any legacy 'admin_order' value on save.
-      tieBreakerMode: 'tie',
-      currentTeamId: settings.currentTeamId.slice(0, 128),
-      timerDurationSeconds: Math.min(
-        MAX_WHOLE_EVENT_TIMER_SECONDS,
-        Math.max(0, Math.round(settings.timerDurationSeconds)),
-      ),
-      timerWarningSeconds: Math.min(
-        43200,
-        Math.max(0, Math.round(settings.timerWarningSeconds)),
-      ),
-      timerRemainingSeconds: Math.min(
-        MAX_WHOLE_EVENT_TIMER_SECONDS,
-        Math.max(0, Math.round(settings.timerRemainingSeconds)),
-      ),
-      timerRunning: Boolean(settings.timerRunning),
-      timerStartedAtMs: Math.max(0, Math.round(settings.timerStartedAtMs)),
-      updatedAt: serverTimestamp(),
-    });
-  } catch (err) {
-    handleFirestoreError(err, OperationType.WRITE, 'settings/event');
-  }
-}
-
-export async function saveTeamRecord(params: {
-  existingTeam?: Team;
-  name: string;
-  projectTitle: string;
-  description: string;
-  logoUrl: string;
-  presentationStatus: PresentationStatus;
-  orderIndex: number;
-  tieBreakerRank: number;
-}): Promise<void> {
-  const cleanName = params.name.trim().slice(0, 100);
-  const cleanTitle = params.projectTitle.trim().slice(0, 160);
-  const cleanDesc = params.description.trim().slice(0, 500);
-  const cleanLogo = params.logoUrl.trim().slice(0, 200000);
-
-  if (!cleanName || !cleanTitle) {
-    throw new Error('Team name and project title are required.');
-  }
-
-  if (params.existingTeam) {
-    const id = params.existingTeam.id;
-    try {
-      await updateDoc(doc(db, 'teams', id), {
-        name: cleanName,
-        projectTitle: cleanTitle,
-        description: cleanDesc,
-        logoUrl: cleanLogo,
-        presentationStatus: params.presentationStatus,
-        orderIndex: Math.max(0, Math.round(params.orderIndex)),
-        tieBreakerRank: Math.max(0, Math.round(params.tieBreakerRank)),
-        updatedAt: serverTimestamp(),
-      });
-    } catch (err) {
-      handleFirestoreError(err, OperationType.UPDATE, `teams/${id}`);
-    }
-    return;
-  }
-
-  let newId = slugifyTeamId(cleanName);
-  const check = await getDoc(doc(db, 'teams', newId));
-  if (check.exists()) {
-    newId = `${newId}-${Date.now().toString(36)}`;
-  }
-
-  try {
-    await setDoc(doc(db, 'teams', newId), {
-      id: newId,
-      name: cleanName,
-      projectTitle: cleanTitle,
-      description: cleanDesc,
-      logoUrl: cleanLogo,
-      presentationStatus: params.presentationStatus,
-      orderIndex: Math.max(0, Math.round(params.orderIndex)),
-      tieBreakerRank: Math.max(0, Math.round(params.tieBreakerRank)),
-      submittedCount: 0,
-      createdAt: serverTimestamp(),
-      updatedAt: serverTimestamp(),
-    });
-  } catch (err) {
-    handleFirestoreError(err, OperationType.CREATE, `teams/${newId}`);
-  }
-}
-
-export async function deleteTeamAndEvaluations(
-  teamId: string,
-  currentSettings: EventSettings | null,
-): Promise<void> {
-  try {
-    const evalsSnap = await getDocs(
-      query(collection(db, 'evaluations'), where('teamId', '==', teamId)),
-    );
-    const batch = writeBatch(db);
-    for (const d of evalsSnap.docs) {
-      batch.delete(d.ref);
-    }
-    batch.delete(doc(db, 'teams', teamId));
-    if (currentSettings && currentSettings.currentTeamId === teamId) {
-      batch.update(doc(db, 'settings', 'event'), {
-        currentTeamId: '',
-        updatedAt: serverTimestamp(),
-      });
-    }
-    await batch.commit();
-  } catch (err) {
-    handleFirestoreError(err, OperationType.DELETE, `teams/${teamId}`);
-  }
-}
-
-export async function saveJudgeRecord(params: {
-  existingJudge?: Judge;
-  judgeCode: string;
-  name: string;
-  department: string;
-  email: string;
-  accessCode: string;
-  active: boolean;
-  allJudgesCountAfter: number;
-}): Promise<void> {
-  const code = params.judgeCode.trim().toUpperCase().replace(/[^A-Z0-9_-]/g, '');
-  const cleanName = params.name.trim().slice(0, 100);
-  const cleanDept = params.department.trim().slice(0, 100);
-  const cleanEmail = params.email.trim().slice(0, 160);
-  const cleanPin = params.accessCode.trim().slice(0, 64);
-
-  if (!code || code.length < 2) {
-    throw new Error('Judge ID must be at least 2 characters (e.g. JUDGE16).');
-  }
-  if (!cleanName) {
-    throw new Error('Judge name is required.');
-  }
-  if (!cleanPin || cleanPin.length < 4) {
-    throw new Error('Access code must be at least 4 characters.');
-  }
-
-  const batch = writeBatch(db);
-  if (params.existingJudge) {
-    const id = params.existingJudge.id;
-    batch.update(doc(db, 'judges', id), {
-      judgeCode: code,
-      name: cleanName,
-      department: cleanDept,
-      email: cleanEmail,
-      active: params.active,
-      updatedAt: serverTimestamp(),
-    });
-    batch.set(doc(db, 'judgeCredentials', id), {
-      judgeId: id,
-      accessCode: cleanPin,
-      updatedAt: serverTimestamp(),
-    });
-  } else {
-    const existing = await getDoc(doc(db, 'judges', code));
-    if (existing.exists()) {
-      throw new Error(`Judge ID ${code} already exists.`);
-    }
-    batch.set(doc(db, 'judges', code), {
-      id: code,
-      judgeCode: code,
-      name: cleanName,
-      department: cleanDept,
-      email: cleanEmail,
-      uid: '',
-      active: params.active,
-      createdAt: serverTimestamp(),
-      updatedAt: serverTimestamp(),
-    });
-    batch.set(doc(db, 'judgeCredentials', code), {
-      judgeId: code,
-      accessCode: cleanPin,
-      updatedAt: serverTimestamp(),
-    });
-  }
-
-  batch.set(doc(db, 'publicStats', 'summary'), {
-    totalJudges: Math.max(0, params.allJudgesCountAfter),
-    updatedAt: serverTimestamp(),
-  });
-
-  try {
-    await batch.commit();
-  } catch (err) {
-    handleFirestoreError(err, OperationType.WRITE, `judges/${code}`);
-  }
-}
-
-export async function unlinkJudgeAccount(judgeId: string): Promise<void> {
-  try {
-    const snap = await getDoc(doc(db, 'judges', judgeId));
-    if (!snap.exists()) return;
-    const judge = snap.data() as Judge;
-    const batch = writeBatch(db);
-    if (judge.uid) {
-      batch.delete(doc(db, 'judgeSessions', judge.uid));
-    }
-    batch.update(doc(db, 'judges', judgeId), {
-      uid: '',
-      updatedAt: serverTimestamp(),
-    });
-    await batch.commit();
-  } catch (err) {
-    handleFirestoreError(err, OperationType.UPDATE, `judges/${judgeId}`);
-  }
-}
-
-export async function deleteJudgeAndEvaluations(
-  judge: Judge,
-  remainingActiveJudgesCount: number,
-): Promise<void> {
-  try {
-    const evalsSnap = await getDocs(
-      query(collection(db, 'evaluations'), where('judgeId', '==', judge.id)),
-    );
-    const teamDecrements = new Map<string, number>();
-    for (const d of evalsSnap.docs) {
-      const ev = d.data() as Evaluation;
-      teamDecrements.set(ev.teamId, (teamDecrements.get(ev.teamId) ?? 0) + 1);
-    }
-
-    const batch = writeBatch(db);
-    for (const d of evalsSnap.docs) {
-      batch.delete(d.ref);
-    }
-    for (const [teamId, count] of teamDecrements.entries()) {
-      batch.update(doc(db, 'teams', teamId), {
-        submittedCount: increment(-count),
-        updatedAt: serverTimestamp(),
-      });
-    }
-    if (judge.uid) {
-      batch.delete(doc(db, 'judgeSessions', judge.uid));
-    }
-    batch.delete(doc(db, 'judgeCredentials', judge.id));
-    batch.delete(doc(db, 'judges', judge.id));
-    batch.set(doc(db, 'publicStats', 'summary'), {
-      totalJudges: Math.max(0, remainingActiveJudgesCount),
-      updatedAt: serverTimestamp(),
-    });
-
-    await batch.commit();
-  } catch (err) {
-    handleFirestoreError(err, OperationType.DELETE, `judges/${judge.id}`);
-  }
+  return subscribeTable('public_leaderboard', ['public_leaderboard'], async () => {
+    // RLS: non-admins see the row only when published = true; zero rows -> null.
+    const { data, error } = await supabase
+      .from('public_leaderboard')
+      .select('*')
+      .eq('id', true)
+      .maybeSingle();
+    if (error) throw error;
+    return data ? mapLeaderboard(data) : null;
+  }, onData);
 }
 
 export async function publishOrHideResults(params: {
@@ -1158,535 +663,247 @@ export async function publishOrHideResults(params: {
   const { publish, teams, judges, evaluations, settings } = params;
   const activeJudges = judges.filter((j) => j.active).length;
   const entries = publish
-    ? calculateLeaderboard(
-        teams,
-        evaluations,
-        activeJudges,
-        settings.tieBreakerMode,
-      )
+    ? calculateLeaderboard(teams, evaluations, activeJudges, settings.tieBreakerMode)
     : [];
-
-  const batch = writeBatch(db);
-  batch.update(doc(db, 'settings', 'event'), {
-    resultsPublished: publish,
-    updatedAt: serverTimestamp(),
+  const { error } = await supabase.rpc('publish_results', {
+    p_publish: publish,
+    p_total_judges: activeJudges,
+    p_total_teams: teams.length,
+    p_total_submissions: evaluations.length,
+    p_entries: entries,
   });
-  batch.set(doc(db, 'publicResults', 'leaderboard'), {
-    published: publish,
-    totalJudges: activeJudges,
-    totalTeams: teams.length,
-    totalSubmissions: evaluations.length,
-    entries,
-    updatedAt: serverTimestamp(),
-  });
-
-  try {
-    await batch.commit();
-  } catch (err) {
-    handleFirestoreError(err, OperationType.WRITE, 'publicResults/leaderboard');
-  }
+  if (error) throw new Error(error.message);
 }
 
-export async function resetEventEvaluations(
-  teams: Team[],
-  judges: Judge[],
-  settings: EventSettings,
+// ---------- event settings ----------
+
+export async function saveEventSettings(
+  settings: Omit<EventSettings, 'updatedAt'>,
 ): Promise<void> {
-  try {
-    const evalsSnap = await getDocs(collection(db, 'evaluations'));
-    const batch = writeBatch(db);
-    for (const d of evalsSnap.docs) {
-      batch.delete(d.ref);
-    }
-    for (const t of teams) {
-      batch.update(doc(db, 'teams', t.id), {
-        submittedCount: 0,
-        presentationStatus: 'Waiting',
-        updatedAt: serverTimestamp(),
-      });
-    }
-    batch.set(doc(db, 'settings', 'event'), {
-      ...settings,
-      resultsPublished: false,
-      submissionsOpen: true,
-      timerRemainingSeconds: settings.timerDurationSeconds,
-      timerRunning: false,
-      timerStartedAtMs: 0,
-      currentTeamId: '',
-      updatedAt: serverTimestamp(),
-    });
-    batch.set(doc(db, 'publicResults', 'leaderboard'), {
-      published: false,
-      totalJudges: judges.filter((j) => j.active).length,
-      totalTeams: teams.length,
-      totalSubmissions: 0,
-      entries: [],
-      updatedAt: serverTimestamp(),
-    });
-    await batch.commit();
-  } catch (err) {
-    handleFirestoreError(err, OperationType.WRITE, 'evaluations');
-  }
+  const { error } = await supabase
+    .from('settings_event')
+    .update({
+      event_name: settings.eventName,
+      college_name: settings.collegeName,
+      tagline: settings.tagline,
+      venue: settings.venue,
+      event_date: settings.eventDate,
+      custom_domain: settings.customDomain,
+      submissions_open: settings.submissionsOpen,
+      editing_allowed: settings.editingAllowed,
+      results_published: settings.resultsPublished,
+      tie_breaker_mode: settings.tieBreakerMode,
+      current_team_id: settings.currentTeamId,
+      timer_duration_seconds: settings.timerDurationSeconds,
+      timer_warning_seconds: settings.timerWarningSeconds,
+      timer_remaining_seconds: settings.timerRemainingSeconds,
+      timer_running: settings.timerRunning,
+      timer_started_at_ms: settings.timerStartedAtMs,
+      updated_at: new Date().toISOString(),
+    })
+    .eq('id', true);
+  if (error) throw error;
 }
 
-export async function initializeEverythingToZeroWith15Teams(
-  existingSettings?: EventSettings | null,
-  options?: {
-    onlyIfNoRatings?: boolean;
-    expectedRatingCount?: number;
-    clearResetLock?: boolean;
-    beforeChunk?: () => Promise<void>;
-    // Runs inside the final transaction; throw to stop (used to prove this run still owns the reset).
-    finalGuard?: (tx: Transaction) => Promise<void>;
-  },
-): Promise<void> {
-  try {
-    const [evalsSnap, teamsSnap, judgesSnap, sessionsSnap, credsSnap] =
-      await Promise.all([
-        getDocs(collection(db, 'evaluations')),
-        getDocs(collection(db, 'teams')),
-        getDocs(collection(db, 'judges')),
-        getDocs(collection(db, 'judgeSessions')),
-        getDocs(collection(db, 'judgeCredentials')),
-      ]);
-
-    // Automatic first-run setup must never wipe an event that already has ratings.
-    if (options?.onlyIfNoRatings && !evalsSnap.empty) return;
-
-    // If ratings changed since the archive was taken, stop before deleting anything.
-    if (
-      options?.expectedRatingCount !== undefined &&
-      evalsSnap.size !== options.expectedRatingCount
-    ) {
-      throw new Error(
-        'Ratings changed after the archive was saved. Nothing was reset. Try again.',
-      );
-    }
-
-    // A full event has thousands of ratings, so delete in modest chunks rather
-    // than one huge request (keeps each request small and a failure recoverable). The small final batch
-    // (default teams, settings, counters) runs last so a failure part-way
-    // never publishes a half-reset state as complete.
-    const toDelete = [
-      ...evalsSnap.docs,
-      ...judgesSnap.docs,
-      ...sessionsSnap.docs,
-      ...credsSnap.docs,
-      ...teamsSnap.docs,
-    ].map((d) => d.ref);
-    for (let i = 0; i < toDelete.length; i += 400) {
-      if (options?.beforeChunk) await options.beforeChunk();
-      const chunk = writeBatch(db);
-      for (const ref of toDelete.slice(i, i + 400)) chunk.delete(ref);
-      await chunk.commit();
-    }
-
-    const queued: Array<['set' | 'delete', ReturnType<typeof doc>, unknown?]> = [];
-    const batch = {
-      set: (ref: ReturnType<typeof doc>, data: unknown) => {
-        queued.push(['set', ref, data]);
-      },
-      delete: (ref: ReturnType<typeof doc>) => {
-        queued.push(['delete', ref]);
-      },
-    };
-    for (let i = 0; i < INITIAL_15_TEAMS.length; i += 1) {
-      const t = INITIAL_15_TEAMS[i];
-      batch.set(doc(db, 'teams', t.id), {
-        id: t.id,
-        name: t.name,
-        projectTitle: t.projectTitle,
-        description: t.description,
-        logoUrl: '',
-        presentationStatus: 'Waiting',
-        orderIndex: i + 1,
-        tieBreakerRank: i + 1,
-        submittedCount: 0,
-        createdAt: serverTimestamp(),
-        updatedAt: serverTimestamp(),
-      });
-    }
-
-    const baseSettings = existingSettings || DEFAULT_EVENT_SETTINGS;
-    batch.set(doc(db, 'settings', 'event'), {
-      ...baseSettings,
-      resultsPublished: false,
-      submissionsOpen: true,
-      editingAllowed: false,
-      currentTeamId: '',
-      timerDurationSeconds: 0,
-      timerWarningSeconds: 0,
-      timerRemainingSeconds: 0,
-      timerRunning: false,
-      timerStartedAtMs: 0,
-      tieBreakerMode: 'tie',
-      updatedAt: serverTimestamp(),
-    });
-
-    batch.set(doc(db, 'publicStats', 'summary'), {
-      totalJudges: 0,
-      updatedAt: serverTimestamp(),
-    });
-
-    // Only the last write of a finished reset clears the in-progress marker.
-    if (options?.clearResetLock) batch.delete(doc(db, 'eventResets', 'current'));
-
-    batch.set(doc(db, 'publicResults', 'leaderboard'), {
-      published: false,
-      totalJudges: 0,
-      totalTeams: INITIAL_15_TEAMS.length,
-      totalSubmissions: 0,
-      entries: [],
-      updatedAt: serverTimestamp(),
-    });
-
-    if (options?.finalGuard) {
-      // Ownership check and the final writes happen together, so an old worker
-      // that lost the reset to another session cannot reopen or reset settings.
-      await runTransaction(db, async (tx) => {
-        await options.finalGuard!(tx);
-        for (const [kind, ref, data] of queued) {
-          if (kind === 'set') tx.set(ref, data as Record<string, unknown>);
-          else tx.delete(ref);
-        }
-      });
-    } else {
-      const b = writeBatch(db);
-      for (const [kind, ref, data] of queued) {
-        if (kind === 'set') b.set(ref, data as Record<string, unknown>);
-        else b.delete(ref);
-      }
-      await b.commit();
-    }
-  } catch (err) {
-    handleFirestoreError(err, OperationType.WRITE, 'settings/event');
-  }
+export async function initializeDefaultEventData(): Promise<void> {
+  // Already seeded server-side; this is insurance for a wiped database.
+  const { count } = await supabase
+    .from('teams')
+    .select('id', { count: 'exact', head: true });
+  if ((count ?? 0) > 0) return;
+  const { error } = await supabase.from('teams').insert(
+    INITIAL_15_TEAMS.map((t, i) => ({
+      id: t.id,
+      name: t.name,
+      project_title: t.projectTitle,
+      description: t.description,
+      presentation_status: 'Waiting',
+      order_index: i + 1,
+      tie_breaker_rank: i + 1,
+    })),
+  );
+  if (error) throw error;
 }
 
-/**
- * Save the current event's final standings (no judge emails, no individual
- * ratings) to eventArchives so a reset never loses the results. Returns the
- * archive id after confirming the document can be read back.
- */
-export async function archiveCurrentEventResults(
-  settings: EventSettings,
-  archivedBy: string,
-): Promise<string> {
-  try {
-    const [teamsSnap, evalsSnap, judgesSnap] = await Promise.all([
-      getDocs(collection(db, 'teams')),
-      getDocs(collection(db, 'evaluations')),
-      getDocs(collection(db, 'judges')),
-    ]);
-    const teams = teamsSnap.docs.map((d) => d.data() as Team);
-    const evaluations = evalsSnap.docs.map((d) => d.data() as Evaluation);
-    const entries = calculateLeaderboard(
-      teams,
-      evaluations,
-      judgesSnap.size,
-    ).map((e) => {
-      // Old single 1-5 ratings are kept as their own standings (never /25).
-      const old = evaluations.filter(
-        (ev) =>
-          ev.teamId === e.teamId &&
-          !isScoredEvaluation(ev) &&
-          isValidStarRating(ev.rating),
-      );
-      const oldAvg = old.length
-        ? Math.round(
-            (old.reduce((a, ev) => a + (ev.rating as number), 0) / old.length) *
-              100 +
-              1e-9,
-          ) / 100
-        : null;
-      return {
-        rank: e.rank,
-        isTied: e.isTied,
-        teamName: e.teamName,
-        projectTitle: e.projectTitle,
-        averageRating: e.averageRating,
-        averageFormatted: e.averageFormatted,
-        submittedCount: e.submittedCount,
-        totalJudges: e.totalJudges,
-        legacyCount: old.length,
-        legacyAverageFormatted: oldAvg === null ? '' : oldAvg.toFixed(2),
-      };
-    });
-    const legacyRatings = evaluations.filter(
-      (ev) => !isScoredEvaluation(ev) && isValidStarRating(ev.rating),
-    ).length;
-    const archiveId = `ev_${Date.now()}`;
-    const ref = doc(db, 'eventArchives', archiveId);
-    await setDoc(ref, {
-      eventName: (settings.eventName || 'Event').slice(0, 160),
-      archivedAt: serverTimestamp(),
-      archivedBy: archivedBy.slice(0, 160),
-      totalJudges: judgesSnap.size,
-      totalTeams: teams.length,
-      totalSubmissions: evaluations.length,
-      entries,
-      // Scale of `averageFormatted` (five criteria, 0-25) and of the old
-      // single-rating averages kept in `legacyAverageFormatted` (1-5).
-      scoreMax: MAX_TOTAL_SCORE,
-      legacyMax: 5,
-      legacyRatings,
-    });
-    const check = await getDoc(ref);
-    const saved = check.data();
-    if (
-      !check.exists() ||
-      !saved ||
-      saved.totalSubmissions !== evaluations.length ||
-      !Array.isArray(saved.entries) ||
-      saved.entries.length !== entries.length
-    ) {
-      throw new Error('The archive could not be confirmed. Nothing was reset.');
-    }
-    return archiveId;
-  } catch (err) {
-    handleFirestoreError(err, OperationType.WRITE, 'eventArchives');
-  }
-}
+// ---------- reset / archive ----------
 
 export interface ResetState {
-  status: 'archiving' | 'deleting';
+  status: string;
   archiveId: string;
   expectedRatingCount: number;
   startedBy: string;
   updatedAtMs: number;
 }
 
-/** A running reset is trusted for this long; after that another admin may take over. */
-const RESET_LOCK_STALE_MS = 3 * 60 * 1000;
-
-/** Present while a reset has started but not finished. Admin only. */
+// The Supabase reset is one atomic RPC, so there is no resumable partial state.
 export async function getResetState(): Promise<ResetState | null> {
-  const snap = await getDoc(doc(db, 'eventResets', 'current'));
-  if (!snap.exists()) return null;
-  const x = snap.data();
-  return {
-    status: x.status === 'deleting' ? 'deleting' : 'archiving',
-    archiveId: String(x.archiveId ?? ''),
-    expectedRatingCount: Number(x.expectedRatingCount ?? 0),
-    startedBy: String(x.startedBy ?? ''),
-    updatedAtMs: Number(x.updatedAtMs ?? 0),
-  };
-}
-
-/**
- * Archive the finished event, then reset for the next one. Admin accounts are kept.
- *
- * Safety rules:
- * - Only one reset runs at a time (a marker document taken in a transaction).
- * - Submissions are closed first so no rating can arrive mid-reset.
- * - Before anything is deleted, a failure puts everything back (marker removed,
- *   submissions reopened, nothing lost).
- * - Once deleting has started, submissions stay closed and the marker stays.
- *   Running this again resumes the SAME reset and reuses the original archive;
- *   it never archives a half-deleted event.
- */
-export async function archiveAndStartNewEvent(
-  settings: EventSettings,
-  archivedBy: string,
-): Promise<string> {
-  const lockRef = doc(db, 'eventResets', 'current');
-  const settingsRef = doc(db, 'settings', 'event');
-  const wasOpen = settings.submissionsOpen;
-
-  // Identifies this run. If another admin takes over a marker that looked abandoned,
-  // this run notices before its next delete and stops.
-  const token = `${Date.now().toString(36)}${Math.random().toString(36).slice(2)}`;
-
-  // 1. Take the marker (or resume a reset that already started deleting).
-  let resume: ResetState | null = null;
-  try {
-    await runTransaction(db, async (tx) => {
-      const snap = await tx.get(lockRef);
-      resume = null;
-      if (snap.exists()) {
-        const d = snap.data();
-        const fresh =
-          Date.now() - Number(d.updatedAtMs ?? 0) < RESET_LOCK_STALE_MS;
-        if (fresh) {
-          throw new Error(
-            'Another reset is already running. Wait a few minutes and try again.',
-          );
-        }
-        if (d.status === 'deleting') {
-          resume = {
-            status: 'deleting',
-            archiveId: String(d.archiveId ?? ''),
-            expectedRatingCount: Number(d.expectedRatingCount ?? 0),
-            startedBy: String(d.startedBy ?? ''),
-            updatedAtMs: Number(d.updatedAtMs ?? 0),
-          };
-        }
-      }
-      tx.set(lockRef, {
-        status: resume ? 'deleting' : 'archiving',
-        archiveId: resume ? (resume as ResetState).archiveId : '',
-        expectedRatingCount: resume
-          ? (resume as ResetState).expectedRatingCount
-          : 0,
-        startedBy: archivedBy.slice(0, 160),
-        owner: token,
-        updatedAtMs: Date.now(),
-      });
-    });
-  } catch (err) {
-    if (err instanceof Error && /already running/.test(err.message)) throw err;
-    handleFirestoreError(err, OperationType.WRITE, 'eventResets/current');
-  }
-
-  // Undo for failures that happen before anything is deleted.
-  const undo = async () => {
-    try {
-      await writeBatch(db).delete(lockRef).commit();
-      if (wasOpen) {
-        await updateDoc(settingsRef, {
-          submissionsOpen: true,
-          updatedAt: serverTimestamp(),
-        });
-      }
-    } catch {
-      /* the stale marker expires on its own; submissions can be reopened in Controls */
-    }
-  };
-
-  let archiveId: string;
-  if (resume) {
-    archiveId = (resume as ResetState).archiveId;
-  } else {
-    try {
-      // 2. Close submissions so no rating can arrive between archive and reset.
-      await updateDoc(settingsRef, {
-        submissionsOpen: false,
-        updatedAt: serverTimestamp(),
-      });
-      // 3. Save and verify the archive, then confirm nothing changed since.
-      archiveId = await archiveCurrentEventResults(settings, archivedBy);
-      const saved = await getDoc(doc(db, 'eventArchives', archiveId));
-      const archivedRatings = Number(saved.data()?.totalSubmissions ?? 0);
-      const now = await getDocs(collection(db, 'evaluations'));
-      if (now.size !== archivedRatings) {
-        throw new Error(
-          'Ratings changed after the archive was saved. Nothing was reset. Try again.',
-        );
-      }
-      // Point of no return: from here a failure keeps submissions closed.
-      await updateDoc(lockRef, {
-        status: 'deleting',
-        archiveId,
-        expectedRatingCount: archivedRatings,
-        updatedAtMs: Date.now(),
-      });
-    } catch (err) {
-      await undo();
-      throw err;
-    }
-  }
-
-  // 4. Delete and recreate. On failure the marker stays so this can be resumed.
-  try {
-    await initializeEverythingToZeroWith15Teams(
-      { ...settings, submissionsOpen: true },
-      {
-        clearResetLock: true,
-        finalGuard: async (tx) => {
-          const cur = await tx.get(lockRef);
-          if (!cur.exists() || cur.data().owner !== token) {
-            throw new Error(
-              'This reset was taken over by another admin session, so this one stopped.',
-            );
-          }
-        },
-        beforeChunk: async () => {
-          await runTransaction(db, async (tx) => {
-            const cur = await tx.get(lockRef);
-            if (!cur.exists() || cur.data().owner !== token) {
-              throw new Error(
-                'This reset was taken over by another admin session, so this one stopped.',
-              );
-            }
-            tx.update(lockRef, { updatedAtMs: Date.now() });
-          });
-        },
-      },
-    );
-  } catch (err) {
-    if (err instanceof Error && /taken over/.test(err.message)) throw err;
-    throw new Error(
-      'The reset did not finish. Your results are archived and submissions stay closed. Run Start New Event again to resume.',
-      { cause: err },
-    );
-  }
-  return archiveId;
+  return null;
 }
 
 export interface EventArchive {
   id: string;
   eventName: string;
-  archivedAtMs: number;
+  archivedAt?: unknown;
   archivedBy: string;
   totalJudges: number;
   totalTeams: number;
   totalSubmissions: number;
-  entries: {
-    rank: number;
-    isTied?: boolean;
-    teamName: string;
-    projectTitle?: string;
-    averageFormatted: string;
-    submittedCount?: number;
-    legacyCount?: number;
-    legacyAverageFormatted?: string;
-  }[];
-  /** Scale of `averageFormatted`. Missing on archives made before the five-criteria change (those are 1-5). */
-  scoreMax?: number;
-  legacyMax?: number;
-  legacyRatings?: number;
+  entries: LeaderboardEntry[];
+  scoreMax: number;
 }
 
-/** Archived results of earlier events, newest first. Admin only (rules enforce it). */
 export async function listEventArchives(): Promise<EventArchive[]> {
-  try {
-    const snap = await getDocs(collection(db, 'eventArchives'));
-    return snap.docs
-      .map((d) => {
-        const x = d.data();
-        return {
-          id: d.id,
-          eventName: String(x.eventName ?? ''),
-          archivedAtMs: x.archivedAt?.toMillis?.() ?? 0,
-          archivedBy: String(x.archivedBy ?? ''),
-          totalJudges: Number(x.totalJudges ?? 0),
-          totalTeams: Number(x.totalTeams ?? 0),
-          totalSubmissions: Number(x.totalSubmissions ?? 0),
-          entries: Array.isArray(x.entries) ? x.entries : [],
-          scoreMax: typeof x.scoreMax === 'number' ? x.scoreMax : undefined,
-          legacyMax: typeof x.legacyMax === 'number' ? x.legacyMax : undefined,
-          legacyRatings: typeof x.legacyRatings === 'number' ? x.legacyRatings : undefined,
-        } as EventArchive;
-      })
-      .sort((a, b) => b.archivedAtMs - a.archivedAtMs);
-  } catch (err) {
-    handleFirestoreError(err, OperationType.LIST, 'eventArchives');
-  }
+  const { data, error } = await supabase
+    .from('event_archives')
+    .select('*')
+    .order('archived_at', { ascending: false });
+  if (error) throw error;
+  return (data ?? []).map((r: any) => ({
+    id: r.id,
+    eventName: r.event_name,
+    archivedAt: r.archived_at,
+    archivedBy: r.archived_by,
+    totalJudges: r.total_judges,
+    totalTeams: r.total_teams,
+    totalSubmissions: r.total_submissions,
+    entries: (r.entries ?? []) as LeaderboardEntry[],
+    scoreMax: r.score_max,
+  }));
 }
 
-export async function resetAllEventDataToZero(
+// Archive current standings, then reset for a new event: one atomic RPC.
+// The server closes submissions first and refuses if the rating count moved,
+// so an archive can never silently miss late scores.
+export async function archiveAndStartNewEvent(
   settings: EventSettings,
-): Promise<void> {
-  return initializeEverythingToZeroWith15Teams(settings);
+  archivedBy: string,
+): Promise<string> {
+  const [{ data: teams }, { data: judges }, { data: evals }, { count: evalCount }] =
+    await Promise.all([
+      supabase.from('teams').select('*').order('order_index', { ascending: true }),
+      supabase.from('judges').select('*'),
+      supabase.from('evaluations').select('*'),
+      supabase.from('evaluations').select('id', { count: 'exact', head: true }),
+    ]);
+  const teamList = (teams ?? []).map(mapTeam);
+  const judgeList = (judges ?? []).map(mapJudge);
+  const evalList = (evals ?? []).map(mapEvaluation);
+  const activeJudges = judgeList.filter((j) => j.active).length;
+  const entries = calculateLeaderboard(teamList, evalList, activeJudges, settings.tieBreakerMode);
+
+  const { data, error } = await supabase.rpc('archive_and_reset_event', {
+    p_event_name: settings.eventName,
+    p_archived_by: archivedBy,
+    p_entries: entries,
+    p_total_judges: activeJudges,
+    p_total_teams: teamList.length,
+    p_total_submissions: evalList.length,
+    p_expected_evals: evalCount ?? 0,
+    p_default_teams: INITIAL_15_TEAMS.map((t, i) => ({
+      id: t.id,
+      name: t.name,
+      projectTitle: t.projectTitle,
+      description: t.description,
+      orderIndex: i + 1,
+      tieBreakerRank: i + 1,
+    })),
+    p_settings: { timerDurationSeconds: DEFAULT_EVENT_SETTINGS.timerDurationSeconds },
+  });
+  if (error) throw new Error(error.message);
+  return data as string;
+}
+
+// Archive-only (no reset), used by the admin Archives view.
+export async function archiveCurrentEventResults(params: {
+  settings: EventSettings;
+  teams: Team[];
+  judges: Judge[];
+  evaluations: Evaluation[];
+  archivedBy: string;
+}): Promise<string> {
+  const { settings, teams, judges, evaluations, archivedBy } = params;
+  const activeJudges = judges.filter((j) => j.active).length;
+  const entries = calculateLeaderboard(
+    teams,
+    evaluations,
+    activeJudges,
+    settings.tieBreakerMode,
+  );
+  const id = `ev_${Date.now()}`;
+  const { error } = await supabase.from('event_archives').insert({
+    id,
+    event_name: settings.eventName,
+    archived_by: archivedBy,
+    total_judges: activeJudges,
+    total_teams: teams.length,
+    total_submissions: evaluations.length,
+    entries,
+    score_max: 25,
+  });
+  if (error) throw error;
+  return id;
 }
 
 export async function syncJudgeCountSummary(totalJudges: number): Promise<void> {
-  try {
-    await setDoc(doc(db, 'publicStats', 'summary'), {
-      totalJudges: Math.max(0, totalJudges),
-      updatedAt: serverTimestamp(),
-    });
-  } catch (err) {
-    handleFirestoreError(err, OperationType.WRITE, 'publicStats/summary');
+  const { error } = await supabase
+    .from('public_summary')
+    .update({ total_judges: totalJudges, updated_at: new Date().toISOString() })
+    .eq('id', true);
+  if (error) throw error;
+}
+
+// ---------- compatibility shims over removed legacy machinery ----------
+
+// Old slot-based admin claiming is gone: an approved request materializes as
+// an admins row (via approve_admin_request), so "claiming" is just a lookup.
+export async function claimAdminSlot(
+  user: { uid: string },
+  _name?: string,
+): Promise<AdminUser> {
+  const { data, error } = await supabase
+    .from('admins')
+    .select('*')
+    .eq('uid', user.uid)
+    .maybeSingle();
+  if (error) throw error;
+  if (!data) {
+    throw new Error(
+      'Your admin access is not active yet. An existing administrator must approve your request.',
+    );
   }
+  return mapAdmin(data);
+}
+
+// Judge-code login is not supported on the new backend; judges register with
+// name + email (anonymous sign-in), same as the current app's primary flow.
+export async function claimJudgeSlot(): Promise<never> {
+  throw new Error(
+    'Judge codes are no longer used. Register with your name and email instead.',
+  );
+}
+
+// Slot reconciliation was needed to repair the old 5-slot model; the new
+// backend has no slots, so there is nothing to reconcile.
+export async function reconcileAdminSlots(): Promise<{ slotted: number }> {
+  return { slotted: 0 };
+}
+
+// Danger-zone full reset: archives current standings first (same atomic RPC
+// as Start New Event), then reseeds the 15 default teams.
+export async function initializeEverythingToZeroWith15Teams(
+  settings: EventSettings | null,
+  meta?: { requestedBy?: string; onlyIfNoRatings?: boolean },
+): Promise<void> {
+  if (meta?.onlyIfNoRatings) {
+    const [{ count: teamCount }, { count: evalCount }] = await Promise.all([
+      supabase.from('teams').select('id', { count: 'exact', head: true }),
+      supabase.from('evaluations').select('id', { count: 'exact', head: true }),
+    ]);
+    // Nothing to initialize when data already exists.
+    if ((teamCount ?? 0) > 0 || (evalCount ?? 0) > 0) return;
+  }
+  await archiveAndStartNewEvent(
+    settings ?? { ...DEFAULT_EVENT_SETTINGS },
+    meta?.requestedBy ?? 'admin',
+  );
 }
