@@ -102,7 +102,7 @@ export function ProjectorPage() {
             <div className="flex flex-wrap items-center gap-3">
               <BrandMark className="w-8 h-8" />
               <span className="font-display font-bold text-xl sm:text-2xl tracking-tight text-white">
-                PROJECT ARENA
+                RANK RUSH
               </span>
               <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-[#16A34A] text-white text-xs font-bold">
                 <Radio className="w-3.5 h-3.5" />
