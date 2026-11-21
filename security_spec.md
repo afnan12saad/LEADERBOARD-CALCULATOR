@@ -1,4 +1,4 @@
-# PROJECT ARENA Firestore Security Specification
+# RANK RUSH Firestore Security Specification
 
 ## 1. Data Invariants
 
