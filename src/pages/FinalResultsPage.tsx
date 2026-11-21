@@ -10,8 +10,9 @@ import {
   DEFAULT_EVENT_SETTINGS,
   subscribeAllEvaluations,
   subscribeAllJudges,
+  subscribePublishedLeaderboard,
 } from '../services/arenaService';
-import type { Evaluation, Judge } from '../types/arena';
+import type { Evaluation, Judge, PublishedLeaderboard } from '../types/arena';
 import { calculateLeaderboard } from '../utils/scoring';
 
 export function FinalResultsPage() {
@@ -19,6 +20,20 @@ export function FinalResultsPage() {
     useArenaAuth();
   const [adminJudges, setAdminJudges] = useState<Judge[]>([]);
   const [adminEvaluations, setAdminEvaluations] = useState<Evaluation[]>([]);
+  const [publishedBoard, setPublishedBoard] =
+    useState<PublishedLeaderboard | null>(null);
+
+  // Once the admin releases results, the published standings become readable
+  // by everyone; until then this page stays locked for non-admins.
+  const resultsPublished = Boolean(settings?.resultsPublished);
+
+  useEffect(() => {
+    if (isAdmin || !resultsPublished) {
+      setPublishedBoard(null);
+      return;
+    }
+    return subscribePublishedLeaderboard(setPublishedBoard, true);
+  }, [isAdmin, resultsPublished]);
 
   useEffect(() => {
     if (!isAdmin) {
@@ -111,17 +126,33 @@ export function FinalResultsPage() {
               </div>
             )}
           </div>
+        ) : resultsPublished ? (
+          <div className="space-y-8 animate-reveal">
+            {publishedBoard && publishedBoard.entries.length > 0 ? (
+              <PodiumShowcase
+                entries={publishedBoard.entries}
+                teams={teams}
+                showProjectTitle
+              />
+            ) : (
+              <div className="bg-[#0D1E33] border border-[#1E3A5F] rounded-xl p-8 text-center text-sm text-slate-400">
+                Official results have been released. Standings will appear
+                here shortly.
+              </div>
+            )}
+          </div>
         ) : (
           <div className="max-w-xl mx-auto bg-[#0D1E33] border border-[#1E3A5F] rounded-xl p-8 sm:p-10 text-center space-y-4">
             <div className="w-12 h-12 rounded-lg bg-[#142D4C] text-[#F5B942] flex items-center justify-center mx-auto">
               <Lock className="w-6 h-6" />
             </div>
             <h2 className="text-xl font-display font-bold text-white">
-              Leaderboard Is Admin Only
+              Results Not Yet Released
             </h2>
             <p className="text-sm text-slate-300 leading-relaxed">
-              Leaderboard rankings and scores are visible only to signed-in
-              event administrators.
+              Standings and scores are hidden while judging is underway. Once
+              the Event Admin releases the official results, everyone can view
+              them here.
             </p>
             <div className="pt-2 flex flex-wrap justify-center gap-3">
               {judgeProfile && (
