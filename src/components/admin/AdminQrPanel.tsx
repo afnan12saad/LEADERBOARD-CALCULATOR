@@ -46,7 +46,7 @@ export function AdminQrPanel({ settings, onNotify }: AdminQrPanelProps) {
     if (!qrDataUrl) return;
     const link = document.createElement('a');
     link.href = qrDataUrl;
-    link.download = 'project-arena-judge-qr.png';
+    link.download = 'rank-rush-judge-qr.png';
     link.click();
     onNotify('Downloaded Judge Access QR code.');
   };
@@ -62,7 +62,7 @@ export function AdminQrPanel({ settings, onNotify }: AdminQrPanelProps) {
           {qrDataUrl ? (
             <img
               src={qrDataUrl}
-              alt="QR code for PROJECT ARENA Judge Login"
+              alt="QR code for RANK RUSH Judge Login"
               className="w-64 h-64 rounded-lg bg-white p-2.5"
             />
           ) : (
@@ -72,7 +72,7 @@ export function AdminQrPanel({ settings, onNotify }: AdminQrPanelProps) {
           )}
           <div className="mt-4 text-center">
             <div className="font-display font-bold text-white print:text-[#092B59]">
-              PROJECT ARENA
+              RANK RUSH
             </div>
             <div className="text-xs text-slate-400 print:text-slate-600 mt-0.5">
               Scan to Open Judge Portal
