@@ -70,7 +70,7 @@ export function exportLeaderboardCsv(
 
   const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
   const slug = settings.eventName.toLowerCase().replace(/[^a-z0-9]+/g, '-');
-  triggerDownload(blob, `${slug || 'project-arena'}-leaderboard.csv`);
+  triggerDownload(blob, `${slug || 'rank-rush'}-leaderboard.csv`);
 }
 
 export function exportFullWorkbookXlsx(
@@ -141,7 +141,7 @@ export function exportFullWorkbookXlsx(
   XLSX.utils.book_append_sheet(wb, ws3, 'All Ratings');
 
   const slug = settings.eventName.toLowerCase().replace(/[^a-z0-9]+/g, '-');
-  XLSX.writeFile(wb, `${slug || 'project-arena'}-evaluation-report.xlsx`);
+  XLSX.writeFile(wb, `${slug || 'rank-rush'}-evaluation-report.xlsx`);
 }
 
 export function exportLeaderboardPdf(
@@ -159,7 +159,7 @@ export function exportLeaderboardPdf(
   doc.setTextColor(245, 185, 66); // #F5B942 Gold
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(11);
-  doc.text('PROJECT ARENA | SMART PROJECT EVALUATION SYSTEM', 40, 32);
+  doc.text('RANK RUSH | SMART PROJECT EVALUATION SYSTEM', 40, 32);
 
   doc.setTextColor(255, 255, 255);
   doc.setFontSize(20);
@@ -210,5 +210,5 @@ export function exportLeaderboardPdf(
   });
 
   const slug = settings.eventName.toLowerCase().replace(/[^a-z0-9]+/g, '-');
-  doc.save(`${slug || 'project-arena'}-leaderboard.pdf`);
+  doc.save(`${slug || 'rank-rush'}-leaderboard.pdf`);
 }

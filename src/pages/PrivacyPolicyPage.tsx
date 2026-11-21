@@ -15,7 +15,7 @@ export function PrivacyPolicyPage() {
             Privacy Policy
           </h1>
           <p className="text-xs text-slate-400 mt-2">
-            Effective Date: November 20, 2026 | PROJECT ARENA Evaluation System
+            Effective Date: November 20, 2026 | RANK RUSH Evaluation System
           </p>
         </div>
 
@@ -24,7 +24,7 @@ export function PrivacyPolicyPage() {
             1. Information Collected
           </h2>
           <p>
-            PROJECT ARENA collects only the information necessary to administer
+            RANK RUSH collects only the information necessary to administer
             academic project evaluations: authorized judge identifiers, names,
             academic departments, authentication email addresses used for
             account verification, five-criteria team scores (0 to 5 each), and optional

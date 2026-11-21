@@ -99,8 +99,8 @@ export function JudgeDashboardPage() {
               Welcome, {judgeProfile.name}
             </h1>
             <p className="text-sm text-slate-300">
-              Select a participating team below to score it on five criteria (0 to 5 each, total out of 25)
-              overall presentation rating.
+              Select a participating team below to score it on five criteria
+              (0 to 5 each, total out of 25).
             </p>
           </div>
 

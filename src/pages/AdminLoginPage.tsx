@@ -23,6 +23,7 @@ import { useArenaAuth } from '../context/ArenaAuthContext';
 import {
   buildAdminApprovalEmailUrl,
   validateAdminRegistrationInput,
+  MAX_ADMIN_USERS,
 } from '../utils/scoring';
 
 type AuthMode = 'signin' | 'register' | 'forgot';
@@ -259,7 +260,7 @@ export function AdminLoginPage() {
                 Event Committee Console
               </p>
               <span className="inline-flex items-center px-2.5 py-1 rounded-md bg-[#081422] text-xs font-semibold font-mono-tabular text-slate-300">
-                Max 5 admin accounts
+                Max {MAX_ADMIN_USERS} admin accounts
               </span>
             </div>
             <h1 className="text-2xl font-display font-bold text-white">

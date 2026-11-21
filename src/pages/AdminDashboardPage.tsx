@@ -46,6 +46,7 @@ import type {
 import {
   calculateDashboardMetrics,
   calculateLeaderboard,
+  MAX_ADMIN_USERS,
 } from '../utils/scoring';
 
 type AdminTab =
@@ -86,7 +87,7 @@ export function AdminDashboardPage() {
     void getAdminSlotUsage().then(setSlotUsage).catch(() => setSlotUsage(null));
   }, [isAdmin, admins.length]);
   const adminLimitReached =
-    admins.length >= 5 ||
+    admins.length >= MAX_ADMIN_USERS ||
     (slotUsage !== null && (!slotUsage.reconciled || slotUsage.free.length === 0));
 
   const pendingRequests = useMemo(
@@ -237,7 +238,7 @@ export function AdminDashboardPage() {
             </div>
             {adminLimitReached && (
               <p className="text-xs text-amber-200">
-                {admins.length} of 5 admin accounts. Adding another admin is not possible right now. Remove an admin, or see Event Settings for details.
+                {admins.length} of {MAX_ADMIN_USERS} admin accounts. Adding another admin is not possible right now. Remove an admin, or see Event Settings for details.
               </p>
             )}
             <div className="divide-y divide-amber-900/40 space-y-2">
@@ -263,7 +264,7 @@ export function AdminDashboardPage() {
                           showToast(`Approved ${req.name} as Administrator.`);
                         } catch (err) {
                           showToast(
-                            err instanceof Error && /maximum of 5/i.test(err.message)
+                            err instanceof Error && /maximum of 2/i.test(err.message)
                               ? err.message
                               : 'Unable to approve admin request.',
                           );

@@ -77,7 +77,7 @@ export function LiveTimerDisplay({
                 Whole Event Timer
               </div>
               <div className="text-sm sm:text-base font-display font-bold text-[#F5B942] truncate">
-                {eventName || settings?.eventName || 'Project Arena'}
+                {eventName || settings?.eventName || 'Rank Rush'}
               </div>
             </div>
           </div>

@@ -430,8 +430,8 @@ export const INITIAL_15_TEAMS: Array<{
 ];
 
 // Maximum admin accounts in total (owner included). Enforced by firestore.rules via adminSlots/s1..s5.
-export const MAX_ADMIN_USERS = 5;
-export const ADMIN_SLOT_IDS = ['s1', 's2', 's3', 's4', 's5'] as const;
+export const MAX_ADMIN_USERS = 2;
+export const ADMIN_SLOT_IDS = ['s1', 's2'] as const;
 
 export function generateVerificationCode(): string {
   // 6-digit random verification code
@@ -447,12 +447,12 @@ export function buildAdminApprovalEmailUrl(params: {
   appUrl: string;
 }): string {
   const subject = encodeURIComponent(
-    '[PROJECT ARENA] Administrator access request waiting for approval',
+    '[RANK RUSH] Administrator access request waiting for approval',
   );
   const body = encodeURIComponent(
     `Hello,
 
-A new organizer has requested administrator access to the Project Arena Evaluation Console.
+A new organizer has requested administrator access to the Rank Rush Evaluation Console.
 
 Requester Details:
 - Name: ${params.candidateName}
@@ -462,7 +462,7 @@ To approve: open the Admin Console at ${params.appUrl || window.location.origin}
 
 If you do not recognise this person, decline the request.
 
-PROJECT ARENA`,
+RANK RUSH`,
   );
   return `mailto:${params.firstAdminEmail}?subject=${subject}&body=${body}`;
 }

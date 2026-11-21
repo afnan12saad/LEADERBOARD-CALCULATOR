@@ -33,7 +33,9 @@ export function HomePage() {
     (sum, t) => sum + (t.submittedCount || 0),
     0,
   );
-  const resultsReleased = false; // results are never released to judges or the public
+  // Standings stay admin-only while judging; once the admin releases results,
+  // everyone can view them.
+  const resultsReleased = Boolean(settings?.resultsPublished);
   const canSeeLeaderboard = isAdmin;
 
   return (
@@ -51,7 +53,7 @@ export function HomePage() {
               </div>
 
               <h1 className="text-3xl sm:text-5xl font-display font-bold tracking-tight text-white leading-tight [text-wrap:balance]">
-                PROJECT ARENA
+                RANK RUSH
               </h1>
 
               <p className="text-lg sm:text-xl font-display font-semibold text-[#F5B942]">
@@ -157,7 +159,7 @@ export function HomePage() {
         <section className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-14">
           <div className="max-w-2xl mb-8">
             <h2 className="text-2xl font-display font-bold text-white">
-              Streamlined Single-Score Evaluation
+              Streamlined Five-Criteria Evaluation
             </h2>
             <p className="text-sm sm:text-base text-slate-400 mt-2 leading-relaxed">
               Designed for rapid mobile judging during live college project
@@ -182,7 +184,7 @@ export function HomePage() {
 
             <div className="p-6 rounded-xl border border-[#1E3A5F] bg-[#0D1E33]">
               <div className="text-xs font-semibold text-[#F5B942] mb-2">
-                02. Rate Overall Presentation
+                02. Rate Five Criteria
               </div>
               <h3 className="text-lg font-display font-bold text-white mb-2">
                 Five Criteria, Total Out of 25
@@ -236,7 +238,7 @@ export function HomePage() {
               </div>
             </div>
 
-            {canSeeLeaderboard && (
+            {(canSeeLeaderboard || resultsReleased) && (
               <div className="flex items-center gap-3 shrink-0">
                 <Link
                   to="/results"
@@ -244,12 +246,14 @@ export function HomePage() {
                 >
                   {resultsReleased ? 'View Final Results' : 'Admin Results View'}
                 </Link>
-                <Link
-                  to="/projector"
-                  className="px-4 py-2.5 rounded-lg border border-[#24436B] bg-[#091829] text-slate-200 text-sm font-semibold hover:bg-[#102640] transition-colors whitespace-nowrap"
-                >
-                  Open Projector
-                </Link>
+                {canSeeLeaderboard && (
+                  <Link
+                    to="/projector"
+                    className="px-4 py-2.5 rounded-lg border border-[#24436B] bg-[#091829] text-slate-200 text-sm font-semibold hover:bg-[#102640] transition-colors whitespace-nowrap"
+                  >
+                    Open Projector
+                  </Link>
+                )}
               </div>
             )}
           </div>

@@ -15,7 +15,7 @@ export function TermsPage() {
             Terms & Conditions
           </h1>
           <p className="text-xs text-slate-400 mt-2">
-            Effective Date: November 20, 2026 | PROJECT ARENA Evaluation System
+            Effective Date: November 20, 2026 | RANK RUSH Evaluation System
           </p>
         </div>
 

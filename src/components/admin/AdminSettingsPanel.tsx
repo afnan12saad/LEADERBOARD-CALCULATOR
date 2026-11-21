@@ -13,7 +13,6 @@ import {
 } from 'lucide-react';
 import {
   getAdminSlotUsage,
-  reconcileAdminSlots,
   removeAdminAccount,
   saveEventSettings,
   type AdminSlotUsage,
@@ -61,26 +60,13 @@ export function AdminSettingsPanel({
   const [removeBusy, setRemoveBusy] = useState(false);
   const [actionBusyId, setActionBusyId] = useState<string | null>(null);
   const [slotUsage, setSlotUsage] = useState<AdminSlotUsage | null>(null);
-  const [slotBusy, setSlotBusy] = useState(false);
   const refreshSlots = () => {
     void getAdminSlotUsage().then(setSlotUsage).catch(() => setSlotUsage(null));
   };
   useEffect(refreshSlots, [admins.length]);
   const adminLimitReached =
     admins.length >= MAX_ADMIN_USERS ||
-    (slotUsage !== null && (!slotUsage.reconciled || slotUsage.free.length === 0));
-  const handleReconcile = async () => {
-    setSlotBusy(true);
-    try {
-      const r = await reconcileAdminSlots();
-      onNotify(`${r.slotted} existing admin account${r.slotted === 1 ? '' : 's'} assigned to slots. Adding new admins stays paused until the setup is confirmed.`);
-      refreshSlots();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Unable to reconcile admin slots.');
-    } finally {
-      setSlotBusy(false);
-    }
-  };
+    (slotUsage !== null && (slotUsage.free.length === 0));
 
   // Sync local form fields whenever Firestore event settings update
   useEffect(() => {
@@ -429,31 +415,16 @@ export function AdminSettingsPanel({
               Authorized Admin Accounts
             </h2>
             <p className="text-xs text-slate-400 mt-0.5">
-              Maximum of 5 admin accounts in total, owner included. Every new admin needs approval.
+              Maximum of {MAX_ADMIN_USERS} admin accounts in total, owner included. Every new admin needs approval.
             </p>
           </div>
           <span className="px-2.5 py-1 rounded-md bg-[#081422] text-xs font-semibold font-mono-tabular text-[#F5B942]">
             {admins.length} of {MAX_ADMIN_USERS} admin accounts
           </span>
         </div>
-        {slotUsage && !slotUsage.reconciled && (
-          <div className="px-4 py-3 border-b border-[#152B46] bg-amber-950/30 text-xs text-amber-200 flex flex-wrap items-center justify-between gap-3">
-            <span>
-              Adding new admins is paused until the existing admin list has been checked and the five-admin limit is confirmed. Nobody loses access.
-            </span>
-            <button
-              type="button"
-              disabled={slotBusy}
-              onClick={() => void handleReconcile()}
-              className="min-h-11 px-3 rounded-lg border border-amber-500/50 text-amber-100 font-semibold disabled:opacity-50"
-            >
-              {slotBusy ? 'Working...' : 'Assign existing admins to slots'}
-            </button>
-          </div>
-        )}
         {adminLimitReached && slotUsage?.reconciled && (
           <div className="px-4 py-2 border-b border-[#152B46] text-xs text-slate-300">
-            All five admin slots are in use. Remove an admin to add another.
+            All {MAX_ADMIN_USERS} admin seats are in use. Remove an admin to add another.
           </div>
         )}
 
