@@ -3,9 +3,9 @@ import { readFileSync } from 'node:fs';
 
 const URL = 'https://mmhtdzmamzqoazgbkmdg.supabase.co';
 const ANON = 'sb_publishable_8-DehxwKB3GhCbNs-BrvHw_FFrbDkUe';
-const adminPw = readFileSync('/tmp/test-admin-pw', 'utf8').trim();
+const adminPw = readFileSync('/tmp/test-admin5-pw', 'utf8').trim();
 const defaultTeams = JSON.parse(readFileSync('/tmp/default-teams.json', 'utf8'));
-const ADMIN_UID = '9e6c11ae-7100-48f8-863f-ae398fe954c5';
+const ADMIN_UID = 'de9b3f48-cae4-4948-a6c7-4218f7f9481a';
 
 let pass = 0, fail = 0;
 const ok = (name, cond, extra = '') => {
@@ -14,7 +14,7 @@ const ok = (name, cond, extra = '') => {
 };
 
 const admin = createClient(URL, ANON);
-await admin.auth.signInWithPassword({ email: 'test-admin2@rankrush.test', password: adminPw });
+await admin.auth.signInWithPassword({ email: 'test-admin5@rankrush.dev', password: adminPw });
 
 const mkReq = async (email, pw) => {
   const c = createClient(URL, ANON);
