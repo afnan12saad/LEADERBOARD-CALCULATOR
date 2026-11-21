@@ -336,6 +336,15 @@ end $$;
 grant usage on schema public to anon, authenticated;
 grant select on public.settings_event, public.public_summary, public.public_leaderboard, public.teams, public.admin_quota to anon, authenticated;
 grant select on public.evaluations, public.judges, public.admin_requests, public.admins, public.event_archives to authenticated;
+
+-- Admin DML via the Data API (RLS policies above still gate every row to is_admin()).
+grant update on public.admin_requests to authenticated;
+grant insert, update, delete on public.teams to authenticated;
+grant delete on public.judges to authenticated;
+grant delete on public.evaluations to authenticated;
+grant update on public.public_summary to authenticated;
+grant update on public.settings_event to authenticated;
+grant insert on public.event_archives to authenticated;
 grant insert on public.judges to anon, authenticated;
 grant insert on public.admin_requests to authenticated;
 grant update on public.judges to anon, authenticated;
@@ -437,3 +446,8 @@ alter publication supabase_realtime add table public.event_archives;
 -- Migration 6 (applied): archive_and_reset_event now restores timer_duration_seconds
 -- too (previously remaining was restored but duration stayed 0, so the timer UI
 -- showed "Event Timer (00:00:00)" over nonzero digits).
+
+-- Migration 7 (applied): added the admin DML table grants above (settings_event,
+-- public_summary, teams, judges delete, evaluations delete, admin_requests update,
+-- event_archives insert). Without them every admin direct write through the Data
+-- API failed with "permission denied for table" even though RLS allowed it.
