@@ -342,6 +342,7 @@ grant update on public.admin_requests to authenticated;
 grant insert, update, delete on public.teams to authenticated;
 grant delete on public.judges to authenticated;
 grant delete on public.evaluations to authenticated;
+grant insert, update on public.evaluations to authenticated;
 grant update on public.public_summary to authenticated;
 grant update on public.settings_event to authenticated;
 grant insert on public.event_archives to authenticated;
@@ -451,3 +452,11 @@ alter publication supabase_realtime add table public.event_archives;
 -- public_summary, teams, judges delete, evaluations delete, admin_requests update,
 -- event_archives insert). Without them every admin direct write through the Data
 -- API failed with "permission denied for table" even though RLS allowed it.
+
+-- Migration 8 (applied): grant insert, update on evaluations to authenticated.
+-- The evaluations_self_insert / evaluations_self_update / evaluations_admin_all
+-- policies were dead without it: direct table writes failed with "permission
+-- denied for table evaluations" before RLS even ran. Score submission in the
+-- app goes through the submit_score RPC, so this only enables the direct-write
+-- paths the policies already describe (judge writes own row while submissions
+-- are open, admin writes any row). Found by live Suite G regression tests.
