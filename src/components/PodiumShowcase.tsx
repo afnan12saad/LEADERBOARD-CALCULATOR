@@ -308,7 +308,7 @@ export function PodiumShowcase({
         {/* Center Callout Heading (matching leader_1ae5b02a.webp) */}
         <div className="text-center max-w-xl mx-auto mt-8 space-y-1.5">
           <h3 className="text-base sm:text-lg font-display font-bold text-[#F5B942]">
-            Official Project Arena Standings
+            Official Rank Rush Standings
           </h3>
           <p className="text-xs sm:text-sm text-slate-400">{subtitle}</p>
         </div>
