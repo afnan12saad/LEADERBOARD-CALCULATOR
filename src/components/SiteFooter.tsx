@@ -12,7 +12,7 @@ export function SiteFooter() {
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 text-sm text-slate-400">
         <div>
           <p className="font-display font-semibold text-white">
-            PROJECT ARENA
+            RANK RUSH
           </p>
           <p className="text-xs text-slate-400 mt-0.5">
             {college} | Innovate. Present. Inspire.
